@@ -46,7 +46,7 @@ func (hs *HugoServer) HugoTry() *hugolib.HugoSites {
 	}
 }
 
-func (hs *HugoServer) Rebuild() error {
+func Publish(source string) error {
 	configMap := map[string]any{}
 
 	cfgInit := func(c *commandeer) error {
@@ -57,15 +57,13 @@ func (hs *HugoServer) Rebuild() error {
 	}
 
 	c, err := initializeConfig(true, true, true, &hugoBuilderCommon{
-		source: hs.workingDir,
+		source: source,
 	}, nil, cfgInit)
 
 	if err != nil {
 		log.Println("Error:", err.Error())
 		return err
 	}
-
-	hs.c = c
 
 	err = func() error {
 		defer c.timeTrack(time.Now(), "Built")
