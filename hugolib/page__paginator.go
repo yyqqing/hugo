@@ -43,24 +43,31 @@ func (p *pagePaginator) reset() {
 
 func (p *pagePaginator) Paginate(seq any, options ...any) (*page.Pager, error) {
 	var initErr error
-	p.init.Do(func() {
-		pagerSize, err := page.ResolvePagerSize(p.source.s.Cfg, options...)
-		if err != nil {
-			initErr = err
-			return
+	pagerSize, err := page.ResolvePagerSize(p.source.s.Cfg, options...)
+	if err != nil {
+		initErr = err
+	} else {
+		if p.current != nil && p.current.PageSize() != pagerSize {
+			p.reset()
 		}
+		p.init.Do(func() {
+			// pagerSize, err := page.ResolvePagerSize(p.source.s.Cfg, options...)
+			// if err != nil {
+			// 	initErr = err
+			// 	return
+			// }
 
-		pd := p.source.targetPathDescriptor
-		pd.Type = p.source.outputFormat()
-		paginator, err := page.Paginate(pd, seq, pagerSize)
-		if err != nil {
-			initErr = err
-			return
-		}
+			pd := p.source.targetPathDescriptor
+			pd.Type = p.source.outputFormat()
+			paginator, err := page.Paginate(pd, seq, pagerSize)
+			if err != nil {
+				initErr = err
+				return
+			}
 
-		p.current = paginator.Pagers()[0]
-	})
-
+			p.current = paginator.Pagers()[0]
+		})
+	}
 	if initErr != nil {
 		return nil, initErr
 	}
