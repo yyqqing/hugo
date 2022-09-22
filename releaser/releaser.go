@@ -40,14 +40,17 @@ func New(skipPush, try bool, step int) (*ReleaseHandler, error) {
 	if err != nil {
 		return nil, err
 	}
+	branch = strings.TrimSpace(branch)
+
 	if !strings.HasPrefix(branch, prefix) {
 		return nil, fmt.Errorf("branch %q is not a release branch", branch)
 	}
 
-	logf("Branch: %s\n", branch)
-
 	version := strings.TrimPrefix(branch, prefix)
 	version = strings.TrimPrefix(version, "v")
+
+	logf("Branch: %s|Version: v%s\n", branch, version)
+
 	rh := &ReleaseHandler{branchVersion: version, skipPush: skipPush, try: try, step: step}
 
 	if try {
@@ -141,16 +144,6 @@ func (r *ReleaseHandler) bumpVersions(ver hugo.Version) error {
 		`Minor:(\s*)(\d*),`, fmt.Sprintf(`Minor:${1}%d,`, ver.Minor),
 		`PatchLevel:(\s*)(\d*),`, fmt.Sprintf(`PatchLevel:${1}%d,`, ver.PatchLevel),
 		`Suffix:(\s*)".*",`, fmt.Sprintf(`Suffix:${1}"%s",`, toDev)); err != nil {
-		return err
-	}
-
-	snapcraftGrade := "stable"
-	if ver.Suffix != "" {
-		snapcraftGrade = "devel"
-	}
-	if err := r.replaceInFile("snap/snapcraft.yaml",
-		`version: "(.*)"`, fmt.Sprintf(`version: "%s"`, ver),
-		`grade: (.*) #`, fmt.Sprintf(`grade: %s #`, snapcraftGrade)); err != nil {
 		return err
 	}
 
