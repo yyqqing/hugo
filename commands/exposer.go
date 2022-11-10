@@ -46,6 +46,39 @@ func (hs *HugoServer) HugoTry() *hugolib.HugoSites {
 	}
 }
 
+func (hs *HugoServer) BuildSites(source string) (*hugolib.HugoSites, error) {
+	config := map[string]any{
+		"buildExpired": true,
+		"buildDrafts":  true,
+		"buildFuture":  true,
+	}
+
+	cfgInit := func(c *commandeer) error {
+		for key, value := range config {
+			c.Set(key, value)
+		}
+		return nil
+	}
+
+	c, err := initializeConfig(true, true, false, &hugoBuilderCommon{
+		source: source,
+	}, nil, cfgInit)
+	if err != nil {
+		return nil, err
+	}
+
+	sites, err := hugolib.NewHugoSites(*c.DepsCfg)
+	if err != nil {
+		return nil, newSystemError("Error creating sites", err)
+	}
+
+	if err := sites.Build(hugolib.BuildCfg{SkipRender: true}); err != nil {
+		return nil, newSystemError("Error Processing Source Content", err)
+	}
+
+	return sites, nil
+}
+
 func Publish(source string) error {
 	configMap := map[string]any{}
 
@@ -395,11 +428,15 @@ func ResolveTemplate(p page.Page, site *hugolib.Site, layouts ...string) ([]stri
 	switch p.Kind() {
 	case page.KindSection:
 		if len(sections) > 0 {
-			section = sections[0]
+			// section = sections[0]
+			// 取最后一个，以支持多级 sections 模板定制
+			section = sections[len(sections)-1]
 		}
 	case page.KindTaxonomy, page.KindTerm:
 		// b := p.getTreeRef().n
 		// section = b.viewInfo.name.singular
+	// case page.KindPage:
+	// 	section = sections[len(sections)-1]
 	default:
 	}
 
