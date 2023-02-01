@@ -18,7 +18,7 @@ A Fast and Flexible Static Site Generator built with love by [bep](https://githu
 * [Supported Architectures](#supported-architectures)
 * [Choose How to Install](#choose-how-to-install)
    * [Install Hugo as Your Site Generator (Binary Install)](#install-hugo-as-your-site-generator-binary-install)
-   * [Build and Install the Binaries from Source (Advanced Install)](#build-and-install-the-binaries-from-source-advanced-install)
+   * [Build and Install the Binary from Source (Using the Go toolchain)](#build-and-install-the-binary-from-source-using-the-go-toolchain)
 * [The Hugo Documentation](#the-hugo-documentation)
 * [Contributing to Hugo](#contributing-code-to-hugo)
 * [Dependencies](#dependencies)
@@ -40,9 +40,10 @@ Hugo is designed to work well for any kind of website including blogs, tumbles, 
 ## Banner Sponsors
 <p>&nbsp;</p>
 <p float="left">
-  <a href="https://www.linode.com/?utm_campaign=hugosponsor&utm_medium=banner&utm_source=hugogithub" target="_blank"><img src="https://raw.githubusercontent.com/gohugoio/gohugoioTheme/master/static/images/sponsors/linode-logo_standard_light_medium.png" width="200" alt="Linode"></a>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-<a href="https://esolia.com/post/why-did-esolia-choose-hugo/?utm_campaign=hugosponsor&utm_medium=banner&utm_source=hugogithub" target="_blank"><img src="https://raw.githubusercontent.com/gohugoio/gohugoioTheme/master/static/images/sponsors/esolia-logo.svg?sanitize=true" width="200" alt="eSOLIA"></a>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href="https://buttercms.com/hugo-cms/?utm_campaign=sponsorship&utm_medium=banner&utm_source=hugogithub" target="_blank"><img src="https://raw.githubusercontent.com/gohugoio/gohugoioTheme/master/static/images/sponsors/butter-dark.svg?sanitize=true" width="280" alt="ButterCMS"></a>
+  <a href="https://www.linode.com/?utm_campaign=hugosponsor&utm_medium=banner&utm_source=hugogithub" target="_blank"><img src="https://raw.githubusercontent.com/gohugoio/gohugoioTheme/master/assets/images/sponsors/linode-logo_standard_light_medium.png" width="200" alt="Linode"></a>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href="https://buttercms.com/hugo-cms/?utm_campaign=sponsorship&utm_medium=banner&utm_source=hugogithub" target="_blank"><img src="https://raw.githubusercontent.com/gohugoio/gohugoioTheme/master/assets/images/sponsors/butter-dark.svg?sanitize=true" width="280" alt="ButterCMS"></a>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+<a href="https://www.gravitykit.com/?ref=532&campaign=hugo&utm_campaign=hugosponsor&utm_medium=banner&utm_source=hugogithub" target="_blank"><img src="https://raw.githubusercontent.com/gohugoio/gohugoioTheme/master/assets/images/sponsors/graitykit-dark.svg?sanitize=true" width="160" alt="Gravity Kit"></a>
 </p>
 <p>&nbsp;</p>
 
@@ -67,31 +68,24 @@ Building the binaries is an easy task for an experienced `go` getter.
 
 Use the [installation instructions in the Hugo documentation](https://gohugo.io/getting-started/installing/).
 
-### Build and Install the Binaries from Source (Advanced Install)
+### Build and Install the Binary from Source (Using the Go toolchain)
 
 #### Prerequisite Tools
 
-* [Git](https://git-scm.com/)
 * [Go (we test it with the last 2 major versions; but note that Hugo 0.95.0 only builds with >= Go 1.18.)](https://golang.org/dl/)
 
 #### Fetch from GitHub
 
-To fetch and build the source from GitHub:
+To fetch, build and install from the Github source:
 
 ```bash
-mkdir $HOME/src
-cd $HOME/src
-git clone https://github.com/gohugoio/hugo.git
-cd hugo
-go install
+go install github.com/gohugoio/hugo@latest
 ```
-
-**If you are a Windows user, substitute the `$HOME` environment variable above with `%USERPROFILE%`.**
 
 If you want to compile with Sass/SCSS support use `--tags extended` and make sure `CGO_ENABLED=1` is set in your go environment. If you don't want to have CGO enabled, you may use the following command to temporarily enable CGO only for hugo compilation:
 
 ```bash
-CGO_ENABLED=1 go install --tags extended
+CGO_ENABLED=1 go install --tags extended github.com/gohugoio/hugo@latest
 ```
 
 ## The Hugo Documentation
@@ -102,8 +96,6 @@ The Hugo documentation now lives in its own repository, see https://github.com/g
 git clone git@github.com:gohugoio/hugo.git
 ```
 ## Contributing code to Hugo
-
-**Note  March 16th 2022:** We are currently very constrained on human resources to do code reviews, so we currently require any new Pull Requests to be limited to bug fixes closing an existing issue. Also, we have updated to Go 1.18, but we will currently not accept any generic rewrites, "interface{} to any" replacements and similar.
 
 For a complete guide to contributing to Hugo, see the [Contribution Guide](CONTRIBUTING.md).
 
@@ -247,4 +239,3 @@ google.golang.org/grpc="v1.46.0"
 google.golang.org/protobuf="v1.28.0"
 gopkg.in/yaml.v2="v2.4.0"
 ```
-

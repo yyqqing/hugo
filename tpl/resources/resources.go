@@ -123,10 +123,16 @@ func (ns *Namespace) Copy(s any, r resource.Resource) (resource.Resource, error)
 // Get locates the filename given in Hugo's assets filesystem
 // and creates a Resource object that can be used for further transformations.
 func (ns *Namespace) Get(filename any) resource.Resource {
+
 	filenamestr, err := cast.ToStringE(filename)
 	if err != nil {
 		panic(err)
 	}
+
+	if filenamestr == "" {
+		return nil
+	}
+
 	r, err := ns.createClient.Get(filenamestr)
 	if err != nil {
 		panic(err)
@@ -358,8 +364,7 @@ func (ns *Namespace) ToCSS(args ...any) (resource.Resource, error) {
 	}
 
 	if m != nil {
-		maps.PrepareParams(m)
-		if t, found := m["transpiler"]; found {
+		if t, found := maps.LookupEqualFold(m, "transpiler"); found {
 			switch t {
 			case transpilerDart, transpilerLibSass:
 				transpiler = cast.ToString(t)
@@ -409,6 +414,7 @@ func (ns *Namespace) PostCSS(args ...any) (resource.Resource, error) {
 	return ns.postcssClient.Process(r, m)
 }
 
+// PostProcess processes r after the build.
 func (ns *Namespace) PostProcess(r resource.Resource) (postpub.PostPublishedResource, error) {
 	return ns.deps.ResourceSpec.PostProcess(r)
 }
