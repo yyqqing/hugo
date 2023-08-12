@@ -16,6 +16,8 @@ package hugolib
 import (
 	"sync"
 
+	"github.com/gohugoio/hugo/common/herrors"
+	"github.com/gohugoio/hugo/resources/kinds"
 	"github.com/gohugoio/hugo/resources/page"
 )
 
@@ -43,31 +45,24 @@ func (p *pagePaginator) reset() {
 
 func (p *pagePaginator) Paginate(seq any, options ...any) (*page.Pager, error) {
 	var initErr error
-	pagerSize, err := page.ResolvePagerSize(p.source.s.Cfg, options...)
-	if err != nil {
-		initErr = err
-	} else {
-		if p.current != nil && p.current.PageSize() != pagerSize {
-			p.reset()
+	p.init.Do(func() {
+		pagerSize, err := page.ResolvePagerSize(p.source.s.Conf, options...)
+		if err != nil {
+			initErr = err
+			return
 		}
-		p.init.Do(func() {
-			// pagerSize, err := page.ResolvePagerSize(p.source.s.Cfg, options...)
-			// if err != nil {
-			// 	initErr = err
-			// 	return
-			// }
 
-			pd := p.source.targetPathDescriptor
-			pd.Type = p.source.outputFormat()
-			paginator, err := page.Paginate(pd, seq, pagerSize)
-			if err != nil {
-				initErr = err
-				return
-			}
+		pd := p.source.targetPathDescriptor
+		pd.Type = p.source.outputFormat()
+		paginator, err := page.Paginate(pd, seq, pagerSize)
+		if err != nil {
+			initErr = err
+			return
+		}
 
-			p.current = paginator.Pagers()[0]
-		})
-	}
+		p.current = paginator.Pagers()[0]
+	})
+
 	if initErr != nil {
 		return nil, initErr
 	}
@@ -76,9 +71,11 @@ func (p *pagePaginator) Paginate(seq any, options ...any) (*page.Pager, error) {
 }
 
 func (p *pagePaginator) Paginator(options ...any) (*page.Pager, error) {
+	defer herrors.Recover()
+
 	var initErr error
 	p.init.Do(func() {
-		pagerSize, err := page.ResolvePagerSize(p.source.s.Cfg, options...)
+		pagerSize, err := page.ResolvePagerSize(p.source.s.Conf, options...)
 		if err != nil {
 			initErr = err
 			return
@@ -90,12 +87,12 @@ func (p *pagePaginator) Paginator(options ...any) (*page.Pager, error) {
 		var pages page.Pages
 
 		switch p.source.Kind() {
-		case page.KindHome:
+		case kinds.KindHome:
 			// From Hugo 0.57 we made home.Pages() work like any other
 			// section. To avoid the default paginators for the home page
 			// changing in the wild, we make this a special case.
 			pages = p.source.s.RegularPages()
-		case page.KindTerm, page.KindTaxonomy:
+		case kinds.KindTerm, kinds.KindTaxonomy:
 			pages = p.source.Pages()
 		default:
 			pages = p.source.RegularPages()
