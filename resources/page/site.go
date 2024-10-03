@@ -21,7 +21,6 @@ import (
 	"github.com/gohugoio/hugo/config/privacy"
 	"github.com/gohugoio/hugo/config/services"
 	"github.com/gohugoio/hugo/identity"
-	"github.com/gohugoio/hugo/tpl"
 
 	"github.com/gohugoio/hugo/config"
 
@@ -30,7 +29,7 @@ import (
 	"github.com/gohugoio/hugo/navigation"
 )
 
-// Site represents a site. There can be multople sites in a multilingual setup.
+// Site represents a site. There can be multiple sites in a multilingual setup.
 type Site interface {
 	// Returns the Language configured for this Site.
 	Language() *langs.Language
@@ -55,7 +54,7 @@ type Site interface {
 	// A shortcut to the home
 	Home() Page
 
-	// Returns true if we're running in a server.
+	// Deprecated: Use hugo.IsServer instead.
 	IsServer() bool
 
 	// Returns the server port.
@@ -64,7 +63,6 @@ type Site interface {
 	// Returns the configured title for this Site.
 	Title() string
 
-	// Returns the configured language code for this Site.
 	// Deprecated: Use .Language.LanguageCode instead.
 	LanguageCode() string
 
@@ -81,13 +79,16 @@ type Site interface {
 	Hugo() hugo.HugoInfo
 
 	// Returns the BaseURL for this Site.
-	BaseURL() template.URL
+	BaseURL() string
 
 	// Returns a taxonomy map.
 	Taxonomies() TaxonomyList
 
-	// Returns the last modification date of the content.
+	// Deprecated: Use .Lastmod instead.
 	LastChange() time.Time
+
+	// Returns the last modification date of the content.
+	Lastmod() time.Time
 
 	// Returns the Menus for this site.
 	Menus() navigation.Menus
@@ -107,17 +108,13 @@ type Site interface {
 	// Returns the site config.
 	Config() SiteConfig
 
-	// Returns the identity of this site.
-	// This is for internal use only.
-	GetIdentity() identity.Identity
-
-	// Author is deprecated and will be removed in a future release.
+	// Deprecated: Use taxonomies instead.
 	Author() map[string]interface{}
 
-	// Authors is deprecated and will be removed in a future release.
+	// Deprecated: Use taxonomies instead.
 	Authors() AuthorList
 
-	// Returns the social links for this site.
+	// Deprecated: Use .Site.Params instead.
 	Social() map[string]string
 
 	// Deprecated: Use Config().Services.GoogleAnalytics instead.
@@ -126,32 +123,45 @@ type Site interface {
 	// Deprecated: Use Config().Privacy.Disqus instead.
 	DisqusShortname() string
 
-	// For internal use only.
-	GetPageWithTemplateInfo(info tpl.Info, ref ...string) (Page, error)
-
 	// BuildDrafts is deprecated and will be removed in a future release.
 	BuildDrafts() bool
 
-	// IsMultiLingual reports whether this site is configured with more than one language.
+	// Deprecated: Use hugo.IsMultilingual instead.
 	IsMultiLingual() bool
 
 	// LanguagePrefix returns the language prefix for this site.
 	LanguagePrefix() string
 
-	// Deprecated. Use site.Home.OutputFormats.Get "rss" instead.
+	// Deprecated: Use .Site.Home.OutputFormats.Get "rss" instead.
 	RSSLink() template.URL
+
+	// For internal use only.
+	// This will panic if the site is not fully initialized.
+	// This is typically used to inform the user in the content adapter templates,
+	// as these are executed before all the page collections etc. are ready to use.
+	CheckReady()
 }
 
 // Sites represents an ordered list of sites (languages).
 type Sites []Site
 
-// First is a convenience method to get the first Site, i.e. the main language.
+// Deprecated: Use .Sites.Default instead.
 func (s Sites) First() Site {
+	hugo.Deprecate(".Sites.First", "Use .Sites.Default instead.", "v0.127.0")
+	return s.Default()
+}
+
+// Default is a convenience method to get the site corresponding to the default
+// content language.
+func (s Sites) Default() Site {
 	if len(s) == 0 {
 		return nil
 	}
 	return s[0]
 }
+
+// Some additional interfaces implemented by siteWrapper that's not on Site.
+var _ identity.ForEeachIdentityByNameProvider = (*siteWrapper)(nil)
 
 type siteWrapper struct {
 	s Site
@@ -164,17 +174,26 @@ func WrapSite(s Site) Site {
 	return &siteWrapper{s: s}
 }
 
+func (s *siteWrapper) Key() string {
+	return s.s.Language().Lang
+}
+
+// Deprecated: Use .Site.Params instead.
 func (s *siteWrapper) Social() map[string]string {
 	return s.s.Social()
 }
 
+// Deprecated: Use taxonomies instead.
 func (s *siteWrapper) Author() map[string]interface{} {
 	return s.s.Author()
 }
+
+// Deprecated: Use taxonomies instead.
 func (s *siteWrapper) Authors() AuthorList {
-	return AuthorList{}
+	return s.s.Authors()
 }
 
+// Deprecated: Use .Site.Config.Services.GoogleAnalytics.ID instead.
 func (s *siteWrapper) GoogleAnalytics() string {
 	return s.s.GoogleAnalytics()
 }
@@ -211,6 +230,7 @@ func (s *siteWrapper) Home() Page {
 	return s.s.Home()
 }
 
+// Deprecated: Use hugo.IsServer instead.
 func (s *siteWrapper) IsServer() bool {
 	return s.s.IsServer()
 }
@@ -247,7 +267,7 @@ func (s *siteWrapper) Hugo() hugo.HugoInfo {
 	return s.s.Hugo()
 }
 
-func (s *siteWrapper) BaseURL() template.URL {
+func (s *siteWrapper) BaseURL() string {
 	return s.s.BaseURL()
 }
 
@@ -255,8 +275,13 @@ func (s *siteWrapper) Taxonomies() TaxonomyList {
 	return s.s.Taxonomies()
 }
 
+// Deprecated: Use .Site.Lastmod instead.
 func (s *siteWrapper) LastChange() time.Time {
 	return s.s.LastChange()
+}
+
+func (s *siteWrapper) Lastmod() time.Time {
+	return s.s.Lastmod()
 }
 
 func (s *siteWrapper) Menus() navigation.Menus {
@@ -279,22 +304,16 @@ func (s *siteWrapper) Data() map[string]any {
 	return s.s.Data()
 }
 
-func (s *siteWrapper) GetIdentity() identity.Identity {
-	return s.s.GetIdentity()
-}
-
-func (s *siteWrapper) GetPageWithTemplateInfo(info tpl.Info, ref ...string) (Page, error) {
-	return s.s.GetPageWithTemplateInfo(info, ref...)
-}
-
 func (s *siteWrapper) BuildDrafts() bool {
 	return s.s.BuildDrafts()
 }
 
+// Deprecated: Use hugo.IsMultilingual instead.
 func (s *siteWrapper) IsMultiLingual() bool {
 	return s.s.IsMultiLingual()
 }
 
+// Deprecated: Use .Site.Config.Services.Disqus.Shortname instead.
 func (s *siteWrapper) DisqusShortname() string {
 	return s.s.DisqusShortname()
 }
@@ -303,8 +322,19 @@ func (s *siteWrapper) LanguagePrefix() string {
 	return s.s.LanguagePrefix()
 }
 
+// Deprecated: Use .Site.Home.OutputFormats.Get "rss" instead.
 func (s *siteWrapper) RSSLink() template.URL {
 	return s.s.RSSLink()
+}
+
+// For internal use only.
+func (s *siteWrapper) ForEeachIdentityByName(name string, f func(identity.Identity) bool) {
+	s.s.(identity.ForEeachIdentityByNameProvider).ForEeachIdentityByName(name, f)
+}
+
+// For internal use only.
+func (s *siteWrapper) CheckReady() {
+	s.s.CheckReady()
 }
 
 type testSite struct {
@@ -312,13 +342,17 @@ type testSite struct {
 	l *langs.Language
 }
 
+// Deprecated: Use taxonomies instead.
 func (s testSite) Author() map[string]interface{} {
 	return nil
 }
+
+// Deprecated: Use taxonomies instead.
 func (s testSite) Authors() AuthorList {
 	return AuthorList{}
 }
 
+// Deprecated: Use .Site.Params instead.
 func (s testSite) Social() map[string]string {
 	return make(map[string]string)
 }
@@ -331,7 +365,12 @@ func (t testSite) ServerPort() int {
 	return 1313
 }
 
+// Deprecated: Use .Site.Lastmod instead.
 func (testSite) LastChange() (t time.Time) {
+	return
+}
+
+func (testSite) Lastmod() (t time.Time) {
 	return
 }
 
@@ -371,6 +410,7 @@ func (t testSite) Languages() langs.Languages {
 	return nil
 }
 
+// Deprecated: Use .Site.Config.Services.GoogleAnalytics.ID instead.
 func (t testSite) GoogleAnalytics() string {
 	return ""
 }
@@ -379,10 +419,7 @@ func (t testSite) MainSections() []string {
 	return nil
 }
 
-func (t testSite) GetIdentity() identity.Identity {
-	return identity.KeyValueIdentity{Key: "site", Value: t.l.Lang}
-}
-
+// Deprecated: Use hugo.IsServer instead.
 func (t testSite) IsServer() bool {
 	return false
 }
@@ -415,7 +452,7 @@ func (t testSite) Taxonomies() TaxonomyList {
 	return nil
 }
 
-func (t testSite) BaseURL() template.URL {
+func (t testSite) BaseURL() string {
 	return ""
 }
 
@@ -431,10 +468,7 @@ func (s testSite) Config() SiteConfig {
 	return SiteConfig{}
 }
 
-func (testSite) GetPageWithTemplateInfo(info tpl.Info, ref ...string) (Page, error) {
-	return nil, nil
-}
-
+// Deprecated: Use .Site.Config.Services.Disqus.Shortname instead.
 func (testSite) DisqusShortname() string {
 	return ""
 }
@@ -443,6 +477,7 @@ func (s testSite) BuildDrafts() bool {
 	return false
 }
 
+// Deprecated: Use hugo.IsMultilingual instead.
 func (s testSite) IsMultiLingual() bool {
 	return false
 }
@@ -451,8 +486,12 @@ func (s testSite) Param(key any) (any, error) {
 	return nil, nil
 }
 
+// Deprecated: Use .Site.Home.OutputFormats.Get "rss" instead.
 func (s testSite) RSSLink() template.URL {
 	return ""
+}
+
+func (s testSite) CheckReady() {
 }
 
 // NewDummyHugoSite creates a new minimal test site.

@@ -106,7 +106,7 @@ func TestDecodeImageConfig(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := DecodeImageConfig(this.action, this.in, cfg, PNG)
+		result, err := DecodeImageConfig(this.action, strings.Fields(this.in), cfg, PNG)
 		if b, ok := this.expect.(bool); ok && !b {
 			if err == nil {
 				t.Errorf("[%d] parseImageConfig didn't return an expected error", i)
@@ -132,7 +132,7 @@ func newImageConfig(action string, width, height, quality, rotate int, filter, a
 	c.qualitySetForImage = quality != 75
 	c.Rotate = rotate
 	c.BgColorStr = bgColor
-	c.BgColor, _ = hexStringToColor(bgColor)
+	c.BgColor, _ = hexStringToColorGo(bgColor)
 
 	if filter != "" {
 		filter = strings.ToLower(filter)

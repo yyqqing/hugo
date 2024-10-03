@@ -1,4 +1,4 @@
-// Copyright 2023 The Hugo Authors. All rights reserved.
+// Copyright 2024 The Hugo Authors. All rights reserved.
 // Some functions in this file (see comments) is based on the Go source code,
 // copyright The Go Authors and  governed by a BSD-style license.
 //
@@ -40,7 +40,7 @@ type Options struct {
 	Level              logg.Level
 	Stdout             io.Writer
 	Stderr             io.Writer
-	Distinct           bool
+	DistinctLevel      logg.Level
 	StoreErrors        bool
 	HandlerPost        func(e *logg.Entry) error
 	SuppressStatements map[string]bool
@@ -68,10 +68,23 @@ func New(opts Options) Logger {
 	errorsw := &strings.Builder{}
 	logCounters := newLogLevelCounter()
 	handlers := []logg.Handler{
-		whiteSpaceTrimmer(),
-		logHandler,
 		logCounters,
 	}
+
+	if opts.Level == logg.LevelTrace {
+		// Trace is used during development only, and it's useful to
+		// only see the trace messages.
+		handlers = append(handlers,
+			logg.HandlerFunc(func(e *logg.Entry) error {
+				if e.Level != logg.LevelTrace {
+					return logg.ErrStopLogEntry
+				}
+				return nil
+			}),
+		)
+	}
+
+	handlers = append(handlers, whiteSpaceTrimmer(), logHandler)
 
 	if opts.HandlerPost != nil {
 		var hookHandler logg.HandlerFunc = func(e *logg.Entry) error {
@@ -92,12 +105,12 @@ func New(opts Options) Logger {
 	logHandler = multi.New(handlers...)
 
 	var logOnce *logOnceHandler
-	if opts.Distinct {
-		logOnce = newLogOnceHandler(logg.LevelWarn)
+	if opts.DistinctLevel != 0 {
+		logOnce = newLogOnceHandler(opts.DistinctLevel)
 		logHandler = newStopHandler(logOnce, logHandler)
 	}
 
-	if opts.SuppressStatements != nil && len(opts.SuppressStatements) > 0 {
+	if len(opts.SuppressStatements) > 0 {
 		logHandler = newStopHandler(newSuppressStatementsHandler(opts.SuppressStatements), logHandler)
 	}
 
@@ -127,6 +140,7 @@ func New(opts Options) Logger {
 		out:         opts.Stdout,
 		level:       opts.Level,
 		logger:      logger,
+		tracel:      l.WithLevel(logg.LevelTrace),
 		debugl:      l.WithLevel(logg.LevelDebug),
 		infol:       l.WithLevel(logg.LevelInfo),
 		warnl:       l.WithLevel(logg.LevelWarn),
@@ -137,10 +151,20 @@ func New(opts Options) Logger {
 // NewDefault creates a new logger with the default options.
 func NewDefault() Logger {
 	opts := Options{
-		Distinct: true,
-		Level:    logg.LevelWarn,
-		Stdout:   os.Stdout,
-		Stderr:   os.Stdout,
+		DistinctLevel: logg.LevelWarn,
+		Level:         logg.LevelWarn,
+		Stdout:        os.Stdout,
+		Stderr:        os.Stdout,
+	}
+	return New(opts)
+}
+
+func NewTrace() Logger {
+	opts := Options{
+		DistinctLevel: logg.LevelWarn,
+		Level:         logg.LevelTrace,
+		Stdout:        os.Stdout,
+		Stderr:        os.Stdout,
 	}
 	return New(opts)
 }
@@ -150,13 +174,14 @@ func LevelLoggerToWriter(l logg.LevelLogger) io.Writer {
 }
 
 type Logger interface {
+	Debug() logg.LevelLogger
 	Debugf(format string, v ...any)
 	Debugln(v ...any)
 	Error() logg.LevelLogger
 	Errorf(format string, v ...any)
+	Erroridf(id, format string, v ...any)
 	Errorln(v ...any)
 	Errors() string
-	Errorsf(id, format string, v ...any)
 	Info() logg.LevelLogger
 	InfoCommand(command string) logg.LevelLogger
 	Infof(format string, v ...any)
@@ -172,8 +197,10 @@ type Logger interface {
 	Warn() logg.LevelLogger
 	WarnCommand(command string) logg.LevelLogger
 	Warnf(format string, v ...any)
+	Warnidf(id, format string, v ...any)
 	Warnln(v ...any)
 	Deprecatef(fail bool, format string, v ...any)
+	Trace(s logg.StringFunc)
 }
 
 type logAdapter struct {
@@ -183,10 +210,15 @@ type logAdapter struct {
 	out         io.Writer
 	level       logg.Level
 	logger      logg.Logger
+	tracel      logg.LevelLogger
 	debugl      logg.LevelLogger
 	infol       logg.LevelLogger
 	warnl       logg.LevelLogger
 	errorl      logg.LevelLogger
+}
+
+func (l *logAdapter) Debug() logg.LevelLogger {
+	return l.debugl
 }
 
 func (l *logAdapter) Debugf(format string, v ...any) {
@@ -290,8 +322,24 @@ func (l *logAdapter) Errors() string {
 	return l.errors.String()
 }
 
-func (l *logAdapter) Errorsf(id, format string, v ...any) {
+func (l *logAdapter) Erroridf(id, format string, v ...any) {
+	id = strings.ToLower(id)
+	format += l.idfInfoStatement("error", id, format)
 	l.errorl.WithField(FieldNameStatementID, id).Logf(format, v...)
+}
+
+func (l *logAdapter) Warnidf(id, format string, v ...any) {
+	id = strings.ToLower(id)
+	format += l.idfInfoStatement("warning", id, format)
+	l.warnl.WithField(FieldNameStatementID, id).Logf(format, v...)
+}
+
+func (l *logAdapter) idfInfoStatement(what, id, format string) string {
+	return fmt.Sprintf("\nYou can suppress this %s by adding the following to your site configuration:\nignoreLogs = ['%s']", what, id)
+}
+
+func (l *logAdapter) Trace(s logg.StringFunc) {
+	l.tracel.Log(s)
 }
 
 func (l *logAdapter) sprint(v ...any) string {
@@ -314,4 +362,20 @@ type logWriter struct {
 func (w logWriter) Write(p []byte) (n int, err error) {
 	w.l.Log(logg.String(string(p)))
 	return len(p), nil
+}
+
+func TimeTrackf(l logg.LevelLogger, start time.Time, fields logg.Fields, format string, a ...any) {
+	elapsed := time.Since(start)
+	if fields != nil {
+		l = l.WithFields(fields)
+	}
+	l.WithField("duration", elapsed).Logf(format, a...)
+}
+
+func TimeTrackfn(fn func() (logg.LevelLogger, error)) error {
+	start := time.Now()
+	l, err := fn()
+	elapsed := time.Since(start)
+	l.WithField("duration", elapsed).Logf("")
+	return err
 }

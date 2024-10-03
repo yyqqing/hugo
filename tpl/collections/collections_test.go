@@ -71,8 +71,7 @@ func TestAfter(t *testing.T) {
 	}
 }
 
-type tstGrouper struct {
-}
+type tstGrouper struct{}
 
 type tstGroupers []*tstGrouper
 
@@ -81,8 +80,7 @@ func (g tstGrouper) Group(key any, items any) (any, error) {
 	return fmt.Sprintf("%v(%d)", key, ilen), nil
 }
 
-type tstGrouper2 struct {
-}
+type tstGrouper2 struct{}
 
 func (g *tstGrouper2) Group(key any, items any) (any, error) {
 	ilen := reflect.ValueOf(items).Len()
@@ -134,7 +132,7 @@ func TestDelimit(t *testing.T) {
 		seq       any
 		delimiter any
 		last      any
-		expect    template.HTML
+		expect    string
 	}{
 		{[]string{"class1", "class2", "class3"}, " ", nil, "class1 class2 class3"},
 		{[]int{1, 2, 3, 4, 5}, ",", nil, "1,2,3,4,5"},
@@ -163,7 +161,7 @@ func TestDelimit(t *testing.T) {
 	} {
 		errMsg := qt.Commentf("[%d] %v", i, test)
 
-		var result template.HTML
+		var result string
 		var err error
 
 		if test.last == nil {
@@ -235,6 +233,7 @@ func TestReverse(t *testing.T) {
 }
 
 func TestEchoParam(t *testing.T) {
+	t.Skip("deprecated, will be removed in Hugo 0.133.0")
 	t.Parallel()
 	c := qt.New(t)
 
@@ -701,7 +700,6 @@ func TestShuffleRandomising(t *testing.T) {
 	// of the sequence happens to be the same as the original sequence. However
 	// the probability of the event is 10^-158 which is negligible.
 	seqLen := 100
-	rand.Seed(time.Now().UTC().UnixNano())
 
 	for _, test := range []struct {
 		seq []int
@@ -897,6 +895,7 @@ func (x TstX) TstRv2() string {
 	return "r" + x.B
 }
 
+//lint:ignore U1000 reflect test
 func (x TstX) unexportedMethod() string {
 	return x.unexported
 }
@@ -925,7 +924,7 @@ func (x TstX) String() string {
 
 type TstX struct {
 	A, B       string
-	unexported string
+	unexported string //lint:ignore U1000 reflect test
 }
 
 type TstParams struct {

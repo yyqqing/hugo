@@ -56,7 +56,8 @@ hugo [flags]
       --printPathWarnings          print warnings on duplicate target paths etc.
       --printUnusedTemplates       print warnings on unused templates.
       --quiet                      build in quiet mode
-      --renderToMemory             render to memory (only useful for benchmark testing)
+      --renderSegments strings     named segments to render (configured in the segments config)
+  -M, --renderToMemory             render to memory (mostly useful when running the server)
   -s, --source string              filesystem path to read files relative from
       --templateMetrics            display metrics about template executions
       --templateMetricsHints       calculate some improvement hints when combined with --templateMetrics
@@ -69,6 +70,7 @@ hugo [flags]
 
 ### SEE ALSO
 
+* [hugo build](/commands/hugo_build/)	 - build builds your site
 * [hugo completion](/commands/hugo_completion/)	 - Generate the autocompletion script for the specified shell
 * [hugo config](/commands/hugo_config/)	 - Print the site configuration
 * [hugo convert](/commands/hugo_convert/)	 - Convert your content to different formats

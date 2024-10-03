@@ -14,14 +14,9 @@
 package template
 
 import (
-	"sync/atomic"
-
+	"github.com/gohugoio/hugo/common/types"
 	template "github.com/gohugoio/hugo/tpl/internal/go_templates/texttemplate"
 )
-
-// See https://github.com/golang/go/issues/59234
-// Moved here to avoid dependency on Go's internal/debug package.
-var SecurityAllowActionJSTmpl atomic.Bool
 
 /*
 
@@ -44,4 +39,15 @@ func (t *Template) Prepare() (*template.Template, error) {
 // See https://github.com/golang/go/issues/5884
 func StripTags(html string) string {
 	return stripTags(html)
+}
+
+func indirect(a any) any {
+	in := doIndirect(a)
+
+	// We have a special Result type that we want to unwrap when printed.
+	if pp, ok := in.(types.PrintableValueProvider); ok {
+		return pp.PrintableValue()
+	}
+
+	return in
 }

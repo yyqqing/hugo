@@ -12,7 +12,7 @@ Generate Markdown documentation for the Hugo CLI.
 Generate Markdown documentation for the Hugo CLI.
 			This command is, mostly, used to create up-to-date documentation
 	of Hugo's command-line interface for https://gohugo.io/.
-	
+
 	It creates one Markdown file per command with front matter suitable
 	for rendering in Hugo.
 
@@ -39,6 +39,7 @@ hugo gen doc [flags] [args]
       --ignoreVendorPaths string   ignores any _vendor for module paths matching the given Glob pattern
       --logLevel string            log level (debug|info|warn|error)
       --quiet                      build in quiet mode
+  -M, --renderToMemory             render to memory (mostly useful when running the server)
   -s, --source string              filesystem path to read files relative from
       --themesDir string           filesystem path to themes directory
   -v, --verbose                    verbose output

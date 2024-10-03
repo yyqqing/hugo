@@ -16,7 +16,6 @@ package page
 import (
 	"context"
 	"fmt"
-	"html/template"
 	"testing"
 
 	qt "github.com/frankban/quicktest"
@@ -115,11 +114,11 @@ func doTestPages(t *testing.T, paginator *Paginator) {
 
 	c.Assert(len(paginatorPages), qt.Equals, 5)
 	c.Assert(paginator.TotalNumberOfElements(), qt.Equals, 21)
-	c.Assert(paginator.PageSize(), qt.Equals, 5)
+	c.Assert(paginator.PagerSize(), qt.Equals, 5)
 	c.Assert(paginator.TotalPages(), qt.Equals, 5)
 
 	first := paginatorPages[0]
-	c.Assert(first.URL(), qt.Equals, template.HTML("page/1/"))
+	c.Assert(first.URL(), qt.Equals, "page/1/")
 	c.Assert(first.First(), qt.Equals, first)
 	c.Assert(first.HasNext(), qt.Equals, true)
 	c.Assert(first.Next(), qt.Equals, paginatorPages[1])
@@ -134,7 +133,7 @@ func doTestPages(t *testing.T, paginator *Paginator) {
 	c.Assert(third.Prev(), qt.Equals, paginatorPages[1])
 
 	last := paginatorPages[4]
-	c.Assert(last.URL(), qt.Equals, template.HTML("page/5/"))
+	c.Assert(last.URL(), qt.Equals, "page/5/")
 	c.Assert(last.Last(), qt.Equals, last)
 	c.Assert(last.HasNext(), qt.Equals, false)
 	c.Assert(last.Next(), qt.IsNil)
@@ -173,7 +172,7 @@ func doTestPagerNoPages(t *testing.T, paginator *Paginator) {
 	c := qt.New(t)
 	c.Assert(len(paginatorPages), qt.Equals, 1)
 	c.Assert(paginator.TotalNumberOfElements(), qt.Equals, 0)
-	c.Assert(paginator.PageSize(), qt.Equals, 5)
+	c.Assert(paginator.PagerSize(), qt.Equals, 5)
 	c.Assert(paginator.TotalPages(), qt.Equals, 0)
 
 	// pageOne should be nothing but the first
@@ -188,7 +187,7 @@ func doTestPagerNoPages(t *testing.T, paginator *Paginator) {
 	c.Assert(pageOne.TotalNumberOfElements(), qt.Equals, 0)
 	c.Assert(pageOne.TotalPages(), qt.Equals, 0)
 	c.Assert(pageOne.PageNumber(), qt.Equals, 1)
-	c.Assert(pageOne.PageSize(), qt.Equals, 5)
+	c.Assert(pageOne.PagerSize(), qt.Equals, 5)
 }
 
 func TestProbablyEqualPageLists(t *testing.T) {

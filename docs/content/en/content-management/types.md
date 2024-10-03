@@ -2,13 +2,13 @@
 title: Content types
 description: Hugo is built around content organized in sections.
 categories: [content management]
-keywords: [lists, sections, content types, types, organization]
+keywords: [lists,sections,content types,types,organization]
 menu:
   docs:
     parent: content-management
     weight: 130
-toc: true
 weight: 130
+toc: true
 aliases: [/content/types]
 ---
 
@@ -16,5 +16,5 @@ A **content type** is a way to organize your content. Hugo resolves the content 
 
 A content type is used to
 
-- Determine how the content is rendered. See [Template Lookup Order](/templates/lookup-order/) and [Content Views](/templates/views) for more.
+- Determine how the content is rendered. See [Template Lookup Order](/templates/lookup-order/) and [Content Views](/templates/content-view) for more.
 - Determine which [archetype](/content-management/archetypes/) template to use for new content.

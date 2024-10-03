@@ -1,4 +1,4 @@
-// Copyright 2023 The Hugo Authors. All rights reserved.
+// Copyright 2024 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,6 +39,7 @@ import (
 
 	"github.com/gohugoio/hugo/common/hstrings"
 	"github.com/gohugoio/hugo/common/htime"
+	"github.com/gohugoio/hugo/common/hugo"
 	"github.com/gohugoio/hugo/common/loggers"
 	"github.com/gohugoio/hugo/common/paths"
 	"github.com/gohugoio/hugo/config"
@@ -46,13 +48,13 @@ import (
 	"github.com/gohugoio/hugo/helpers"
 	"github.com/gohugoio/hugo/hugofs"
 	"github.com/gohugoio/hugo/hugolib"
+	"github.com/gohugoio/hugo/identity"
+	"github.com/gohugoio/hugo/resources/kinds"
 	"github.com/spf13/afero"
 	"github.com/spf13/cobra"
 )
 
-var (
-	errHelp = errors.New("help requested")
-)
+var errHelp = errors.New("help requested")
 
 // Execute executes a command.
 func Execute(args []string) error {
@@ -86,6 +88,11 @@ type commonConfig struct {
 	fs      *hugofs.Fs
 }
 
+type configKey struct {
+	counter                    int32
+	ignoreModulesDoesNotExists bool
+}
+
 // This is the root command.
 type rootCommand struct {
 	Printf  func(format string, v ...interface{})
@@ -99,8 +106,11 @@ type rootCommand struct {
 
 	// Some, but not all commands need access to these.
 	// Some needs more than one, so keep them in a small cache.
-	commonConfigs *lazycache.Cache[int32, *commonConfig]
-	hugoSites     *lazycache.Cache[int32, *hugolib.HugoSites]
+	commonConfigs *lazycache.Cache[configKey, *commonConfig]
+	hugoSites     *lazycache.Cache[configKey, *hugolib.HugoSites]
+
+	// changesFromBuild received from Hugo in watch mode.
+	changesFromBuild chan []identity.Identity
 
 	commands []simplecobra.Commander
 
@@ -127,6 +137,7 @@ type rootCommand struct {
 	verbose bool
 	debug   bool
 	quiet   bool
+	devMode bool // Hidden flag.
 
 	renderToMemory bool
 
@@ -154,17 +165,18 @@ func (r *rootCommand) Commands() []simplecobra.Commander {
 	return r.commands
 }
 
-func (r *rootCommand) ConfigFromConfig(key int32, oldConf *commonConfig) (*commonConfig, error) {
-	cc, _, err := r.commonConfigs.GetOrCreate(key, func(key int32) (*commonConfig, error) {
+func (r *rootCommand) ConfigFromConfig(key configKey, oldConf *commonConfig) (*commonConfig, error) {
+	cc, _, err := r.commonConfigs.GetOrCreate(key, func(key configKey) (*commonConfig, error) {
 		fs := oldConf.fs
 		configs, err := allconfig.LoadConfig(
 			allconfig.ConfigSourceDescriptor{
-				Flags:       oldConf.cfg,
-				Fs:          fs.Source,
-				Filename:    r.cfgFile,
-				ConfigDir:   r.cfgDir,
-				Logger:      r.logger,
-				Environment: r.environment,
+				Flags:                    oldConf.cfg,
+				Fs:                       fs.Source,
+				Filename:                 r.cfgFile,
+				ConfigDir:                r.cfgDir,
+				Logger:                   r.logger,
+				Environment:              r.environment,
+				IgnoreModuleDoesNotExist: key.ignoreModulesDoesNotExists,
 			},
 		)
 		if err != nil {
@@ -182,18 +194,16 @@ func (r *rootCommand) ConfigFromConfig(key int32, oldConf *commonConfig) (*commo
 			cfg:     oldConf.cfg,
 			fs:      fs,
 		}, nil
-
 	})
 
 	return cc, err
-
 }
 
-func (r *rootCommand) ConfigFromProvider(key int32, cfg config.Provider) (*commonConfig, error) {
+func (r *rootCommand) ConfigFromProvider(key configKey, cfg config.Provider) (*commonConfig, error) {
 	if cfg == nil {
 		panic("cfg must be set")
 	}
-	cc, _, err := r.commonConfigs.GetOrCreate(key, func(key int32) (*commonConfig, error) {
+	cc, _, err := r.commonConfigs.GetOrCreate(key, func(key configKey) (*commonConfig, error) {
 		var dir string
 		if r.source != "" {
 			dir, _ = filepath.Abs(r.source)
@@ -205,13 +215,10 @@ func (r *rootCommand) ConfigFromProvider(key int32, cfg config.Provider) (*commo
 			cfg = config.New()
 		}
 
-		if !cfg.IsSet("renderToDisk") {
-			cfg.Set("renderToDisk", true)
-		}
 		if !cfg.IsSet("workingDir") {
 			cfg.Set("workingDir", dir)
 		} else {
-			if err := os.MkdirAll(cfg.GetString("workingDir"), 0777); err != nil {
+			if err := os.MkdirAll(cfg.GetString("workingDir"), 0o777); err != nil {
 				return nil, fmt.Errorf("failed to create workingDir: %w", err)
 			}
 		}
@@ -219,12 +226,13 @@ func (r *rootCommand) ConfigFromProvider(key int32, cfg config.Provider) (*commo
 		// Load the config first to allow publishDir to be configured in config file.
 		configs, err := allconfig.LoadConfig(
 			allconfig.ConfigSourceDescriptor{
-				Flags:       cfg,
-				Fs:          hugofs.Os,
-				Filename:    r.cfgFile,
-				ConfigDir:   r.cfgDir,
-				Environment: r.environment,
-				Logger:      r.logger,
+				Flags:                    cfg,
+				Fs:                       hugofs.Os,
+				Filename:                 r.cfgFile,
+				ConfigDir:                r.cfgDir,
+				Environment:              r.environment,
+				Logger:                   r.logger,
+				IgnoreModuleDoesNotExist: key.ignoreModulesDoesNotExists,
 			},
 		)
 		if err != nil {
@@ -241,9 +249,7 @@ func (r *rootCommand) ConfigFromProvider(key int32, cfg config.Provider) (*commo
 
 		sourceFs := hugofs.Os
 		var destinationFs afero.Fs
-		if cfg.GetBool("renderToDisk") {
-			destinationFs = hugofs.Os
-		} else {
+		if cfg.GetBool("renderToMemory") {
 			destinationFs = afero.NewMemMapFs()
 			if renderStaticToDisk {
 				// Hybrid, render dynamic content to Root.
@@ -253,6 +259,8 @@ func (r *rootCommand) ConfigFromProvider(key int32, cfg config.Provider) (*commo
 				cfg.Set("publishDirDynamic", "/")
 				cfg.Set("publishDirStatic", "/")
 			}
+		} else {
+			destinationFs = hugofs.Os
 		}
 
 		fs := hugofs.NewFromSourceAndDestination(sourceFs, destinationFs, cfg)
@@ -262,7 +270,7 @@ func (r *rootCommand) ConfigFromProvider(key int32, cfg config.Provider) (*commo
 			publishDirStatic := cfg.GetString("publishDirStatic")
 			workingDir := cfg.GetString("workingDir")
 			absPublishDirStatic := paths.AbsPathify(workingDir, publishDirStatic)
-			staticFs := afero.NewBasePathFs(afero.NewOsFs(), absPublishDirStatic)
+			staticFs := hugofs.NewBasePathFs(afero.NewOsFs(), absPublishDirStatic)
 
 			// Serve from both the static and dynamic fs,
 			// the first will take priority.
@@ -303,27 +311,36 @@ func (r *rootCommand) ConfigFromProvider(key int32, cfg config.Provider) (*commo
 	})
 
 	return cc, err
-
 }
 
 func (r *rootCommand) HugFromConfig(conf *commonConfig) (*hugolib.HugoSites, error) {
-	h, _, err := r.hugoSites.GetOrCreate(r.configVersionID.Load(), func(key int32) (*hugolib.HugoSites, error) {
-		depsCfg := deps.DepsCfg{Configs: conf.configs, Fs: conf.fs, LogOut: r.logger.Out(), LogLevel: r.logger.Level()}
+	k := configKey{counter: r.configVersionID.Load()}
+	h, _, err := r.hugoSites.GetOrCreate(k, func(key configKey) (*hugolib.HugoSites, error) {
+		depsCfg := r.newDepsConfig(conf)
 		return hugolib.NewHugoSites(depsCfg)
 	})
 	return h, err
 }
 
 func (r *rootCommand) Hugo(cfg config.Provider) (*hugolib.HugoSites, error) {
-	h, _, err := r.hugoSites.GetOrCreate(r.configVersionID.Load(), func(key int32) (*hugolib.HugoSites, error) {
+	return r.getOrCreateHugo(cfg, false)
+}
+
+func (r *rootCommand) getOrCreateHugo(cfg config.Provider, ignoreModuleDoesNotExist bool) (*hugolib.HugoSites, error) {
+	k := configKey{counter: r.configVersionID.Load(), ignoreModulesDoesNotExists: ignoreModuleDoesNotExist}
+	h, _, err := r.hugoSites.GetOrCreate(k, func(key configKey) (*hugolib.HugoSites, error) {
 		conf, err := r.ConfigFromProvider(key, cfg)
 		if err != nil {
 			return nil, err
 		}
-		depsCfg := deps.DepsCfg{Configs: conf.configs, Fs: conf.fs, LogOut: r.logger.Out(), LogLevel: r.logger.Level()}
+		depsCfg := r.newDepsConfig(conf)
 		return hugolib.NewHugoSites(depsCfg)
 	})
 	return h, err
+}
+
+func (r *rootCommand) newDepsConfig(conf *commonConfig) deps.DepsCfg {
+	return deps.DepsCfg{Configs: conf.configs, Fs: conf.fs, LogOut: r.logger.Out(), LogLevel: r.logger.Level(), ChangesFromBuild: r.changesFromBuild}
 }
 
 func (r *rootCommand) Name() string {
@@ -331,11 +348,11 @@ func (r *rootCommand) Name() string {
 }
 
 func (r *rootCommand) Run(ctx context.Context, cd *simplecobra.Commandeer, args []string) error {
-	if !r.buildWatch {
-		defer r.timeTrack(time.Now(), "Total")
-	}
-
 	b := newHugoBuilder(r, nil)
+
+	if !r.buildWatch {
+		defer b.postBuild("Total", time.Now())
+	}
 
 	if err := b.loadConfig(cd, false); err != nil {
 		return err
@@ -346,9 +363,11 @@ func (r *rootCommand) Run(ctx context.Context, cd *simplecobra.Commandeer, args 
 			defer r.timeTrack(time.Now(), "Built")
 		}
 		err := b.build()
-		return err
+		if err != nil {
+			return err
+		}
+		return nil
 	}()
-
 	if err != nil {
 		return err
 	}
@@ -410,8 +429,17 @@ func (r *rootCommand) PreRun(cd, runner *simplecobra.Commandeer) error {
 		return err
 	}
 
-	r.commonConfigs = lazycache.New[int32, *commonConfig](lazycache.Options{MaxEntries: 5})
-	r.hugoSites = lazycache.New[int32, *hugolib.HugoSites](lazycache.Options{MaxEntries: 5})
+	r.changesFromBuild = make(chan []identity.Identity, 10)
+
+	r.commonConfigs = lazycache.New(lazycache.Options[configKey, *commonConfig]{MaxEntries: 5})
+	// We don't want to keep stale HugoSites in memory longer than needed.
+	r.hugoSites = lazycache.New(lazycache.Options[configKey, *hugolib.HugoSites]{
+		MaxEntries: 1,
+		OnEvict: func(key configKey, value *hugolib.HugoSites) {
+			value.Close()
+			runtime.GC()
+		},
+	})
 
 	return nil
 }
@@ -419,41 +447,45 @@ func (r *rootCommand) PreRun(cd, runner *simplecobra.Commandeer) error {
 func (r *rootCommand) createLogger(running bool) (loggers.Logger, error) {
 	level := logg.LevelWarn
 
-	if r.logLevel != "" {
-		switch strings.ToLower(r.logLevel) {
-		case "debug":
-			level = logg.LevelDebug
-		case "info":
-			level = logg.LevelInfo
-		case "warn", "warning":
-			level = logg.LevelWarn
-		case "error":
-			level = logg.LevelError
-		default:
-			return nil, fmt.Errorf("invalid log level: %q, must be one of debug, warn, info or error", r.logLevel)
-		}
+	if r.devMode {
+		level = logg.LevelTrace
 	} else {
-		if r.verbose {
-			helpers.Deprecated("--verbose", "use --logLevel info", false)
-			level = logg.LevelInfo
-		}
+		if r.logLevel != "" {
+			switch strings.ToLower(r.logLevel) {
+			case "debug":
+				level = logg.LevelDebug
+			case "info":
+				level = logg.LevelInfo
+			case "warn", "warning":
+				level = logg.LevelWarn
+			case "error":
+				level = logg.LevelError
+			default:
+				return nil, fmt.Errorf("invalid log level: %q, must be one of debug, warn, info or error", r.logLevel)
+			}
+		} else {
+			if r.verbose {
+				hugo.Deprecate("--verbose", "use --logLevel info", "v0.114.0")
+				hugo.Deprecate("--verbose", "use --logLevel info", "v0.114.0")
+				level = logg.LevelInfo
+			}
 
-		if r.debug {
-			helpers.Deprecated("--debug", "use --logLevel debug", false)
-			level = logg.LevelDebug
+			if r.debug {
+				hugo.Deprecate("--debug", "use --logLevel debug", "v0.114.0")
+				level = logg.LevelDebug
+			}
 		}
 	}
 
 	optsLogger := loggers.Options{
-		Distinct:    true,
-		Level:       level,
-		Stdout:      r.Out,
-		Stderr:      r.Out,
-		StoreErrors: running,
+		DistinctLevel: logg.LevelWarn,
+		Level:         level,
+		Stdout:        r.Out,
+		Stderr:        r.Out,
+		StoreErrors:   running,
 	}
 
 	return loggers.New(optsLogger), nil
-
 }
 
 func (r *rootCommand) Reset() {
@@ -467,46 +499,59 @@ func (r *rootCommand) IsTestRun() bool {
 }
 
 func (r *rootCommand) Init(cd *simplecobra.Commandeer) error {
+	return r.initRootCommand("", cd)
+}
+
+func (r *rootCommand) initRootCommand(subCommandName string, cd *simplecobra.Commandeer) error {
 	cmd := cd.CobraCommand
-	cmd.Use = "hugo [flags]"
-	cmd.Short = "hugo builds your site"
-	cmd.Long = `hugo is the main command, used to build your Hugo site.
+	commandName := "hugo"
+	if subCommandName != "" {
+		commandName = subCommandName
+	}
+	cmd.Use = fmt.Sprintf("%s [flags]", commandName)
+	cmd.Short = fmt.Sprintf("%s builds your site", commandName)
+	cmd.Long = `COMMAND_NAME is the main command, used to build your Hugo site.
 
 Hugo is a Fast and Flexible Static Site Generator
 built with love by spf13 and friends in Go.
 
 Complete documentation is available at https://gohugo.io/.`
 
+	cmd.Long = strings.ReplaceAll(cmd.Long, "COMMAND_NAME", commandName)
+
 	// Configure persistent flags
 	cmd.PersistentFlags().StringVarP(&r.source, "source", "s", "", "filesystem path to read files relative from")
-	cmd.PersistentFlags().SetAnnotation("source", cobra.BashCompSubdirsInDir, []string{})
+	_ = cmd.MarkFlagDirname("source")
 	cmd.PersistentFlags().StringP("destination", "d", "", "filesystem path to write files to")
-	cmd.PersistentFlags().SetAnnotation("destination", cobra.BashCompSubdirsInDir, []string{})
+	_ = cmd.MarkFlagDirname("destination")
 
 	cmd.PersistentFlags().StringVarP(&r.environment, "environment", "e", "", "build environment")
+	_ = cmd.RegisterFlagCompletionFunc("environment", cobra.NoFileCompletions)
 	cmd.PersistentFlags().StringP("themesDir", "", "", "filesystem path to themes directory")
+	_ = cmd.MarkFlagDirname("themesDir")
 	cmd.PersistentFlags().StringP("ignoreVendorPaths", "", "", "ignores any _vendor for module paths matching the given Glob pattern")
+	_ = cmd.RegisterFlagCompletionFunc("ignoreVendorPaths", cobra.NoFileCompletions)
 	cmd.PersistentFlags().String("clock", "", "set the clock used by Hugo, e.g. --clock 2021-11-06T22:30:00.00+09:00")
+	_ = cmd.RegisterFlagCompletionFunc("clock", cobra.NoFileCompletions)
 
 	cmd.PersistentFlags().StringVar(&r.cfgFile, "config", "", "config file (default is hugo.yaml|json|toml)")
+	_ = cmd.MarkFlagFilename("config", config.ValidConfigFileExtensions...)
 	cmd.PersistentFlags().StringVar(&r.cfgDir, "configDir", "config", "config dir")
+	_ = cmd.MarkFlagDirname("configDir")
 	cmd.PersistentFlags().BoolVar(&r.quiet, "quiet", false, "build in quiet mode")
-
-	// Set bash-completion
-	_ = cmd.PersistentFlags().SetAnnotation("config", cobra.BashCompFilenameExt, config.ValidConfigFileExtensions)
+	cmd.PersistentFlags().BoolVarP(&r.renderToMemory, "renderToMemory", "M", false, "render to memory (mostly useful when running the server)")
 
 	cmd.PersistentFlags().BoolVarP(&r.verbose, "verbose", "v", false, "verbose output")
 	cmd.PersistentFlags().BoolVarP(&r.debug, "debug", "", false, "debug output")
+	cmd.PersistentFlags().BoolVarP(&r.devMode, "devMode", "", false, "only used for internal testing, flag hidden.")
 	cmd.PersistentFlags().StringVar(&r.logLevel, "logLevel", "", "log level (debug|info|warn|error)")
+	_ = cmd.RegisterFlagCompletionFunc("logLevel", cobra.FixedCompletions([]string{"debug", "info", "warn", "error"}, cobra.ShellCompDirectiveNoFileComp))
 	cmd.Flags().BoolVarP(&r.buildWatch, "watch", "w", false, "watch filesystem for changes and recreate as needed")
-	cmd.Flags().BoolVar(&r.renderToMemory, "renderToMemory", false, "render to memory (only useful for benchmark testing)")
+
+	cmd.PersistentFlags().MarkHidden("devMode")
 
 	// Configure local flags
 	applyLocalFlagsBuild(cmd, r)
-
-	// Set bash-completion.
-	// Each flag must first be defined before using the SetAnnotation() call.
-	_ = cmd.Flags().SetAnnotation("source", cobra.BashCompSubdirsInDir, []string{})
 
 	return nil
 }
@@ -514,12 +559,12 @@ Complete documentation is available at https://gohugo.io/.`
 // A sub set of the complete build flags. These flags are used by new and mod.
 func applyLocalFlagsBuildConfig(cmd *cobra.Command, r *rootCommand) {
 	cmd.Flags().StringSliceP("theme", "t", []string{}, "themes to use (located in /themes/THEMENAME/)")
+	_ = cmd.MarkFlagDirname("theme")
 	cmd.Flags().StringVarP(&r.baseURL, "baseURL", "b", "", "hostname (and path) to the root, e.g. https://spf13.com/")
 	cmd.Flags().StringP("cacheDir", "", "", "filesystem path to cache directory")
-	_ = cmd.Flags().SetAnnotation("cacheDir", cobra.BashCompSubdirsInDir, []string{})
+	_ = cmd.MarkFlagDirname("cacheDir")
 	cmd.Flags().StringP("contentDir", "c", "", "filesystem path to content directory")
-	_ = cmd.Flags().SetAnnotation("theme", cobra.BashCompSubdirsInDir, []string{"themes"})
-
+	cmd.Flags().StringSliceP("renderSegments", "", []string{}, "named segments to render (configured in the segments config)")
 }
 
 // Flags needed to do a build (used by hugo and hugo server commands)
@@ -532,8 +577,10 @@ func applyLocalFlagsBuild(cmd *cobra.Command, r *rootCommand) {
 	cmd.Flags().BoolP("ignoreCache", "", false, "ignores the cache directory")
 	cmd.Flags().Bool("enableGitInfo", false, "add Git revision, date, author, and CODEOWNERS info to the pages")
 	cmd.Flags().StringP("layoutDir", "l", "", "filesystem path to layout directory")
+	_ = cmd.MarkFlagDirname("layoutDir")
 	cmd.Flags().BoolVar(&r.gc, "gc", false, "enable to run some cleanup tasks (remove unused cache files) after the build")
 	cmd.Flags().StringVar(&r.poll, "poll", "", "set this to a poll interval, e.g --poll 700ms, to use a poll based approach to watch for file system changes")
+	_ = cmd.RegisterFlagCompletionFunc("poll", cobra.NoFileCompletions)
 	cmd.Flags().Bool("panicOnWarning", false, "panic on first WARNING log")
 	cmd.Flags().Bool("templateMetrics", false, "display metrics about template executions")
 	cmd.Flags().Bool("templateMetricsHints", false, "calculate some improvement hints when combined with --templateMetrics")
@@ -556,9 +603,8 @@ func applyLocalFlagsBuild(cmd *cobra.Command, r *rootCommand) {
 	cmd.Flags().MarkHidden("profile-mutex")
 
 	cmd.Flags().StringSlice("disableKinds", []string{}, "disable different kind of pages (home, RSS etc.)")
+	_ = cmd.RegisterFlagCompletionFunc("disableKinds", cobra.FixedCompletions(kinds.AllKinds, cobra.ShellCompDirectiveNoFileComp))
 	cmd.Flags().Bool("minify", false, "minify any supported output format (HTML, XML etc.)")
-	_ = cmd.Flags().SetAnnotation("destination", cobra.BashCompSubdirsInDir, []string{})
-
 }
 
 func (r *rootCommand) timeTrack(start time.Time, name string) {

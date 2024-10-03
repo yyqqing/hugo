@@ -1,4 +1,4 @@
-// Copyright 2023 The Hugo Authors. All rights reserved.
+// Copyright 2024 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -98,4 +98,46 @@ var reCache = regexpCache{re: make(map[string]*regexp.Regexp)}
 // the cache.
 func GetOrCompileRegexp(pattern string) (re *regexp.Regexp, err error) {
 	return reCache.getOrCompileRegexp(pattern)
+}
+
+// InSlice checks if a string is an element of a slice of strings
+// and returns a boolean value.
+func InSlice(arr []string, el string) bool {
+	for _, v := range arr {
+		if v == el {
+			return true
+		}
+	}
+	return false
+}
+
+// InSlicEqualFold checks if a string is an element of a slice of strings
+// and returns a boolean value.
+// It uses strings.EqualFold to compare.
+func InSlicEqualFold(arr []string, el string) bool {
+	for _, v := range arr {
+		if strings.EqualFold(v, el) {
+			return true
+		}
+	}
+	return false
+}
+
+// ToString converts the given value to a string.
+// Note that this is a more strict version compared to cast.ToString,
+// as it will not try to convert numeric values to strings,
+// but only accept strings or fmt.Stringer.
+func ToString(v any) (string, bool) {
+	switch vv := v.(type) {
+	case string:
+		return vv, true
+	case fmt.Stringer:
+		return vv.String(), true
+	}
+	return "", false
+}
+
+type Tuple struct {
+	First  string
+	Second string
 }

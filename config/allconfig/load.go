@@ -1,4 +1,4 @@
-// Copyright 2023 The Hugo Authors. All rights reserved.
+// Copyright 2024 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -34,10 +34,10 @@ import (
 	hglob "github.com/gohugoio/hugo/hugofs/glob"
 	"github.com/gohugoio/hugo/modules"
 	"github.com/gohugoio/hugo/parser/metadecoders"
-	"github.com/gohugoio/hugo/tpl"
 	"github.com/spf13/afero"
 )
 
+//lint:ignore ST1005 end user message.
 var ErrNoConfigFile = errors.New("Unable to locate config file or config directory. Perhaps you need to create a new site.\n       Run `hugo help new` for details.\n")
 
 func LoadConfig(d ConfigSourceDescriptor) (*Configs, error) {
@@ -64,7 +64,7 @@ func LoadConfig(d ConfigSourceDescriptor) (*Configs, error) {
 		return nil, fmt.Errorf("failed to create config from result: %w", err)
 	}
 
-	moduleConfig, modulesClient, err := l.loadModules(configs)
+	moduleConfig, modulesClient, err := l.loadModules(configs, d.IgnoreModuleDoesNotExist)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load modules: %w", err)
 	}
@@ -91,12 +91,9 @@ func LoadConfig(d ConfigSourceDescriptor) (*Configs, error) {
 		return nil, fmt.Errorf("failed to init config: %w", err)
 	}
 
-	// This is unfortunate, but these are global settings.
-	tpl.SetSecurityAllowActionJSTmpl(configs.Base.Security.GoTemplates.AllowActionJSTmpl)
-	loggers.InitGlobalLogger(configs.Base.PanicOnWarning)
+	loggers.InitGlobalLogger(d.Logger.Level(), configs.Base.PanicOnWarning)
 
 	return configs, nil
-
 }
 
 // ConfigSourceDescriptor describes where to find the config (e.g. config.toml etc.).
@@ -119,6 +116,9 @@ type ConfigSourceDescriptor struct {
 
 	// Defaults to os.Environ if not set.
 	Environ []string
+
+	// If set, this will be used to ignore the module does not exist error.
+	IgnoreModuleDoesNotExist bool
 }
 
 func (d ConfigSourceDescriptor) configFilenames() []string {
@@ -144,6 +144,7 @@ func (l configLoader) applyConfigAliases() error {
 		{Key: "indexes", Value: "taxonomies"},
 		{Key: "logI18nWarnings", Value: "printI18nWarnings"},
 		{Key: "logPathWarnings", Value: "printPathWarnings"},
+		{Key: "ignoreErrors", Value: "ignoreLogs"},
 	}
 
 	for _, alias := range aliases {
@@ -191,12 +192,13 @@ func (l configLoader) applyDefaultConfig() error {
 		"menus":                                maps.Params{},
 		"disableLiveReload":                    false,
 		"pluralizeListTitles":                  true,
+		"capitalizeListTitles":                 true,
 		"forceSyncStatic":                      false,
 		"footnoteAnchorPrefix":                 "",
 		"footnoteReturnLinkContents":           "",
 		"newContentEditor":                     "",
-		"paginate":                             10,
-		"paginatePath":                         "page",
+		"paginate":                             0,  // Moved into the paginator struct in Hugo v0.128.0.
+		"paginatePath":                         "", // Moved into the paginator struct in Hugo v0.128.0.
 		"summaryLength":                        70,
 		"rssLimit":                             -1,
 		"sectionPagesMenu":                     "",
@@ -330,7 +332,6 @@ func (l *configLoader) envStringToVal(k, v string) any {
 	default:
 		return v
 	}
-
 }
 
 func (l *configLoader) loadConfigMain(d ConfigSourceDescriptor) (config.LoadConfigResult, modules.ModulesConfig, error) {
@@ -455,11 +456,12 @@ func (l *configLoader) loadConfigMain(d ConfigSourceDescriptor) (config.LoadConf
 	return res, l.ModulesConfig, err
 }
 
-func (l *configLoader) loadModules(configs *Configs) (modules.ModulesConfig, *modules.Client, error) {
+func (l *configLoader) loadModules(configs *Configs, ignoreModuleDoesNotExist bool) (modules.ModulesConfig, *modules.Client, error) {
 	bcfg := configs.LoadingInfo.BaseConfig
 	conf := configs.Base
 	workingDir := bcfg.WorkingDir
 	themesDir := bcfg.ThemesDir
+	publishDir := bcfg.PublishDir
 
 	cfg := configs.LoadingInfo.Cfg
 
@@ -468,7 +470,7 @@ func (l *configLoader) loadModules(configs *Configs) (modules.ModulesConfig, *mo
 		ignoreVendor, _ = hglob.GetGlob(hglob.NormalizePath(s))
 	}
 
-	ex := hexec.New(conf.Security)
+	ex := hexec.New(conf.Security, workingDir)
 
 	hook := func(m *modules.ModulesConfig) error {
 		for _, tc := range m.AllModules {
@@ -488,16 +490,18 @@ func (l *configLoader) loadModules(configs *Configs) (modules.ModulesConfig, *mo
 	}
 
 	modulesClient := modules.NewClient(modules.ClientConfig{
-		Fs:                 l.Fs,
-		Logger:             l.Logger,
-		Exec:               ex,
-		HookBeforeFinalize: hook,
-		WorkingDir:         workingDir,
-		ThemesDir:          themesDir,
-		Environment:        l.Environment,
-		CacheDir:           conf.Caches.CacheDirModules(),
-		ModuleConfig:       conf.Module,
-		IgnoreVendor:       ignoreVendor,
+		Fs:                       l.Fs,
+		Logger:                   l.Logger,
+		Exec:                     ex,
+		HookBeforeFinalize:       hook,
+		WorkingDir:               workingDir,
+		ThemesDir:                themesDir,
+		PublishDir:               publishDir,
+		Environment:              l.Environment,
+		CacheDir:                 conf.Caches.CacheDirModules(),
+		ModuleConfig:             conf.Module,
+		IgnoreVendor:             ignoreVendor,
+		IgnoreModuleDoesNotExist: ignoreModuleDoesNotExist,
 	})
 
 	moduleConfig, err := modulesClient.Collect()
@@ -569,15 +573,6 @@ func (l configLoader) deleteMergeStrategies() {
 		params[len(params)-1].Params.DeleteMergeStrategy()
 		return false
 	})
-}
-
-func (l configLoader) loadModulesConfig() (modules.Config, error) {
-	modConfig, err := modules.DecodeConfig(l.cfg)
-	if err != nil {
-		return modules.Config{}, err
-	}
-
-	return modConfig, nil
 }
 
 func (l configLoader) wrapFileError(err error, filename string) error {

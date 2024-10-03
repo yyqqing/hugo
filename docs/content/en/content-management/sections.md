@@ -8,8 +8,8 @@ menu:
   docs:
     parent: content-management
     weight: 120
-toc: true
 weight: 120
+toc: true
 aliases: [/content/sections/]
 ---
 
@@ -26,35 +26,35 @@ A typical site consists of one or more sections. For example:
 ```text
 content/
 ├── articles/             <-- section (top-level directory)
-│   ├── 2022/
-│   │   ├── article-1/
-│   │   │   ├── cover.jpg
-│   │   │   └── index.md
-│   │   └── article-2.md
-│   └── 2023/
-│       ├── article-3.md
-│       └── article-4.md
+│   ├── 2022/
+│   │   ├── article-1/
+│   │   │   ├── cover.jpg
+│   │   │   └── index.md
+│   │   └── article-2.md
+│   └── 2023/
+│       ├── article-3.md
+│       └── article-4.md
 ├── products/             <-- section (top-level directory)
-│   ├── product-1/        <-- section (has _index.md file)
-│   │   ├── benefits/     <-- section (has _index.md file)
-│   │   │   ├── _index.md
-│   │   │   ├── benefit-1.md
-│   │   │   └── benefit-2.md
-│   │   ├── features/     <-- section (has _index.md file)
-│   │   │   ├── _index.md
-│   │   │   ├── feature-1.md
-│   │   │   └── feature-2.md
-│   │   └── _index.md
-│   └── product-2/        <-- section (has _index.md file)
-│       ├── benefits/     <-- section (has _index.md file)
-│       │   ├── _index.md
-│       │   ├── benefit-1.md
-│       │   └── benefit-2.md
-│       ├── features/     <-- section (has _index.md file)
-│       │   ├── _index.md
-│       │   ├── feature-1.md
-│       │   └── feature-2.md
-│       └── _index.md
+│   ├── product-1/        <-- section (has _index.md file)
+│   │   ├── benefits/     <-- section (has _index.md file)
+│   │   │   ├── _index.md
+│   │   │   ├── benefit-1.md
+│   │   │   └── benefit-2.md
+│   │   ├── features/     <-- section (has _index.md file)
+│   │   │   ├── _index.md
+│   │   │   ├── feature-1.md
+│   │   │   └── feature-2.md
+│   │   └── _index.md
+│   └── product-2/        <-- section (has _index.md file)
+│       ├── benefits/     <-- section (has _index.md file)
+│       │   ├── _index.md
+│       │   ├── benefit-1.md
+│       │   └── benefit-2.md
+│       ├── features/     <-- section (has _index.md file)
+│       │   ├── _index.md
+│       │   ├── feature-1.md
+│       │   └── feature-2.md
+│       └── _index.md
 ├── _index.md
 └── about.md
 ```
@@ -77,7 +77,10 @@ With the file structure from the [example above](#overview):
 
 1. The articles/2022 and articles/2023 directories do not have list pages; they are not sections.
 
-1. The list page for the products section, by default, includes product-1 and product-2, but not their descendant pages. To include descendant pages, use the `.RegularPagesRecursive` collection instead of the `.Pages` collection in the list template. See [details](/variables/page/#page-collections).
+1. The list page for the products section, by default, includes product-1 and product-2, but not their descendant pages. To include descendant pages, use the `RegularPagesRecursive` method instead of the `Pages` method in the list template.
+
+[`Pages`]: /methods/page/pages/
+[`RegularPagesRecursive`]: /methods/page/regularpagesrecursive/
 
 1. All directories in the products section have list pages; each directory is a section.
 
@@ -87,13 +90,13 @@ Hugo has a defined [lookup order] to determine which template to use when render
 
 With the file structure from the [example above](#overview):
 
-Content directory|List page template
+Content directory|Section template
 :--|:--
 content/products|layouts/products/list.html
 content/products/product-1|layouts/products/list.html
 content/products/product-1/benefits|layouts/products/list.html
 
-Content directory|Single page template
+Content directory|Single template
 :--|:--
 content/products|layouts/products/single.html
 content/products/product-1|layouts/products/single.html
@@ -106,8 +109,7 @@ If you need to use a different template for a subsection, specify `type` and/or 
 
 ## Ancestors and descendants
 
-A section has one or more ancestors (including the home page), and zero or more descendants.  With the file structure from the [example above](#overview):
-
+A section has one or more ancestors (including the home page), and zero or more descendants. With the file structure from the [example above](#overview):
 
 ```text
 content/products/product-1/benefits/benefit-1.md
@@ -117,16 +119,16 @@ The content file (benefit-1.md) has four ancestors: benefits, product-1, product
 
 For example, use the `.Ancestors` method to render breadcrumb navigation.
 
-{{< code file="layouts/partials/breadcrumb.html" >}}
+{{< code file=layouts/partials/breadcrumb.html >}}
 <nav aria-label="breadcrumb" class="breadcrumb">
   <ol>
     {{ range .Ancestors.Reverse }}
       <li>
-        <a href="{{ .Permalink }}">{{ .LinkTitle }}</a>
+        <a href="{{ .RelPermalink }}">{{ .LinkTitle }}</a>
       </li>
     {{ end }}
     <li class="active">
-      <a aria-current="page" href="{{ .Permalink }}">{{ .LinkTitle }}</a>
+      <a aria-current="page" href="{{ .RelPermalink }}">{{ .LinkTitle }}</a>
     </li>
   </ol>
 </nav>
@@ -154,10 +156,9 @@ Hugo renders this, where each breadcrumb is a link to the corresponding page:
 Home » Products » Product 1 » Benefits » Benefit 1
 ```
 
-
 [archetype]: /content-management/archetypes/
 [content type]: /content-management/types/
 [directory structure]: /getting-started/directory-structure/
-[section templates]: /templates/section-templates/
+[section templates]: /templates/types/#section
 [leaf bundles]: /content-management/page-bundles/#leaf-bundles
 [branch bundles]: /content-management/page-bundles/#branch-bundles

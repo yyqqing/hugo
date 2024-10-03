@@ -1,4 +1,4 @@
-// Copyright 2023 The Hugo Authors. All rights reserved.
+// Copyright 2024 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -102,7 +102,6 @@ slug: "mytagslug"
 		"taxonomy": {"tags": "/tagsslug/:slug/"},
 		"term":     {"tags": "/tagsslug/tag/:slug/"},
 	})
-
 }
 
 func TestPermalinksOldSetup(t *testing.T) {
@@ -145,7 +144,6 @@ slug: "p1slugvalue"
 		"taxonomy": {},
 		"term":     {"withpageslug": "/pageslug/:slug/"},
 	})
-
 }
 
 func TestPermalinksNestedSections(t *testing.T) {
@@ -194,5 +192,43 @@ List.
 	b.AssertFileContent("public/libros/index.html", "List.")
 	b.AssertFileContent("public/libros/fiction/index.html", "List.")
 	b.AssertFileContent("public/libros/fiction/2023/book1/index.html", "Single.")
+}
 
+func TestPermalinksUrlCascade(t *testing.T) {
+	t.Parallel()
+
+	files := `
+-- layouts/_default/list.html --
+List|{{ .Kind }}|{{ .RelPermalink }}|
+-- layouts/_default/single.html --
+Single|{{ .Kind }}|{{ .RelPermalink }}|
+-- hugo.toml --
+-- content/cooking/delicious-recipes/_index.md --
+---
+url: /delicious-recipe/
+cascade:
+  url: /delicious-recipe/:slug/
+---
+-- content/cooking/delicious-recipes/example1.md --
+---
+title: Recipe 1
+---
+-- content/cooking/delicious-recipes/example2.md --
+---
+title: Recipe 2
+slug: custom-recipe-2
+---
+`
+	b := hugolib.NewIntegrationTestBuilder(
+		hugolib.IntegrationTestConfig{
+			T:           t,
+			TxtarString: files,
+			LogLevel:    logg.LevelWarn,
+		}).Build()
+
+	t.Log(b.LogString())
+	b.Assert(b.H.Log.LoggCount(logg.LevelWarn), qt.Equals, 0)
+	b.AssertFileContent("public/delicious-recipe/index.html", "List|section|/delicious-recipe/")
+	b.AssertFileContent("public/delicious-recipe/recipe-1/index.html", "Single|page|/delicious-recipe/recipe-1/")
+	b.AssertFileContent("public/delicious-recipe/custom-recipe-2/index.html", "Single|page|/delicious-recipe/custom-recipe-2/")
 }

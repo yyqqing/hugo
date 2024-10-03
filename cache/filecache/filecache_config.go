@@ -15,6 +15,7 @@
 package filecache
 
 import (
+	"errors"
 	"fmt"
 	"path"
 	"path/filepath"
@@ -23,8 +24,6 @@ import (
 
 	"github.com/gohugoio/hugo/common/maps"
 	"github.com/gohugoio/hugo/config"
-
-	"errors"
 
 	"github.com/mitchellh/mapstructure"
 	"github.com/spf13/afero"
@@ -47,6 +46,7 @@ const (
 	CacheKeyAssets      = "assets"
 	CacheKeyModules     = "modules"
 	CacheKeyGetResource = "getresource"
+	CacheKeyMisc        = "misc"
 )
 
 type Configs map[string]FileCacheConfig
@@ -71,8 +71,12 @@ var defaultCacheConfigs = Configs{
 		MaxAge: -1,
 		Dir:    resourcesGenDir,
 	},
-	CacheKeyGetResource: FileCacheConfig{
+	CacheKeyGetResource: {
 		MaxAge: -1, // Never expire
+		Dir:    cacheDirProject,
+	},
+	CacheKeyMisc: {
+		MaxAge: -1,
 		Dir:    cacheDirProject,
 	},
 }
@@ -119,6 +123,11 @@ func (f Caches) ModulesCache() *Cache {
 // AssetsCache gets the file cache for assets (processed resources, SCSS etc.).
 func (f Caches) AssetsCache() *Cache {
 	return f[CacheKeyAssets]
+}
+
+// MiscCache gets the file cache for miscellaneous stuff.
+func (f Caches) MiscCache() *Cache {
+	return f[CacheKeyMisc]
 }
 
 // GetResourceCache gets the file cache for remote resources.
@@ -225,7 +234,6 @@ func DecodeConfig(fs afero.Fs, bcfg config.BaseConfig, m map[string]any) (Config
 
 // Resolves :resourceDir => /myproject/resources etc., :cacheDir => ...
 func resolveDirPlaceholder(fs afero.Fs, bcfg config.BaseConfig, placeholder string) (cacheDir string, isResource bool, err error) {
-
 	switch strings.ToLower(placeholder) {
 	case ":resourcedir":
 		return "", true, nil

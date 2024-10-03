@@ -1,24 +1,26 @@
 ---
-title: Robots.txt file
-linkTitle: Robots.txt
+title: robots.txt template
+linkTitle: robots.txt templates
 description: Hugo can generate a customized robots.txt in the same way as any other template.
 categories: [templates]
-keywords: [robots,search engines]
+keywords: []
 menu:
   docs:
     parent: templates
-    weight: 230
-weight: 230
+    weight: 170
+weight: 170
 aliases: [/extras/robots-txt/]
 ---
 
 To generate a robots.txt file from a template, change the [site configuration]:
 
-{{< code-toggle file="hugo" >}}
+{{< code-toggle file=hugo >}}
 enableRobotsTXT = true
 {{< /code-toggle >}}
 
-By default, Hugo generates robots.txt using an [internal template][internal].
+By default, Hugo generates robots.txt using an [embedded template].
+
+[embedded template]: {{% eturl robots %}}
 
 ```text
 User-agent: *
@@ -35,7 +37,7 @@ You may overwrite the internal template with a custom template. Hugo selects the
 
 ## robots.txt template example
 
-{{< code file="layouts/robots.txt" >}}
+{{< code file=layouts/robots.txt >}}
 User-agent: *
 {{ range .Pages }}
 Disallow: {{ .RelPermalink }}
@@ -47,7 +49,7 @@ This template creates a robots.txt file with a `Disallow` directive for each pag
 {{% note %}}
 To create a robots.txt file without using a template:
 
-1. Set `enableRobotsTXT` to `false` in the [site configuration].
+1. Set `enableRobotsTXT` to `false` in the site configuration.
 2. Create a robots.txt file in the `static` directory.
 
 Remember that Hugo copies everything in the [static directory][static] to the root of `publishDir` (typically `public`) when you build your site.
@@ -56,4 +58,3 @@ Remember that Hugo copies everything in the [static directory][static] to the ro
 {{% /note %}}
 
 [site configuration]: /getting-started/configuration/
-[internal]: https://github.com/gohugoio/hugo/blob/master/tpl/tplimpl/embedded/templates/_default/robots.txt

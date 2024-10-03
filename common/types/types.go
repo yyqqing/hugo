@@ -92,5 +92,63 @@ type DevMarker interface {
 	DevOnly()
 }
 
+// Unwrapper is implemented by types that can unwrap themselves.
+type Unwrapper interface {
+	// Unwrapv is for internal use only.
+	// It got its slightly odd name to prevent collisions with user types.
+	Unwrapv() any
+}
+
+// Unwrap returns the underlying value of v if it implements Unwrapper, otherwise v is returned.
+func Unwrapv(v any) any {
+	if u, ok := v.(Unwrapper); ok {
+		return u.Unwrapv()
+	}
+	return v
+}
+
+// LowHigh represents a byte or slice boundary.
+type LowHigh[S ~[]byte | string] struct {
+	Low  int
+	High int
+}
+
+func (l LowHigh[S]) IsZero() bool {
+	return l.Low < 0 || (l.Low == 0 && l.High == 0)
+}
+
+func (l LowHigh[S]) Value(source S) S {
+	return source[l.Low:l.High]
+}
+
 // This is only used for debugging purposes.
 var InvocationCounter atomic.Int64
+
+// NewTrue returns a pointer to b.
+func NewBool(b bool) *bool {
+	return &b
+}
+
+// PrintableValueProvider is implemented by types that can provide a printable value.
+type PrintableValueProvider interface {
+	PrintableValue() any
+}
+
+var _ PrintableValueProvider = Result[any]{}
+
+// Result is a generic result type.
+type Result[T any] struct {
+	// The result value.
+	Value T
+
+	// The error value.
+	Err error
+}
+
+// PrintableValue returns the value or panics if there is an error.
+func (r Result[T]) PrintableValue() any {
+	if r.Err != nil {
+		panic(r.Err)
+	}
+	return r.Value
+}

@@ -14,10 +14,12 @@
 package resource
 
 import (
+	"github.com/gohugoio/hugo/common/maps"
 	"strings"
 	"time"
 
 	"github.com/gohugoio/hugo/helpers"
+	"github.com/pelletier/go-toml/v2"
 
 	"github.com/spf13/cast"
 )
@@ -35,9 +37,9 @@ func GetParamToLower(r Resource, key string) any {
 }
 
 func getParam(r Resource, key string, stringToLower bool) any {
-	v := r.Params()[strings.ToLower(key)]
+	v, err := maps.GetNestedParam(key, ".", r.Params())
 
-	if v == nil {
+	if v == nil || err != nil {
 		return nil
 	}
 
@@ -55,6 +57,10 @@ func getParam(r Resource, key string, stringToLower bool) any {
 		return cast.ToFloat64(v)
 	case time.Time:
 		return val
+	case toml.LocalDate:
+		return val.AsTime(time.UTC)
+	case toml.LocalDateTime:
+		return val.AsTime(time.UTC)
 	case []string:
 		if stringToLower {
 			return helpers.SliceToLower(val)
@@ -65,6 +71,5 @@ func getParam(r Resource, key string, stringToLower bool) any {
 	case map[any]any:
 		return v
 	}
-
 	return nil
 }

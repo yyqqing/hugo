@@ -21,12 +21,9 @@ import (
 	"html/template"
 	"time"
 
-	"github.com/gohugoio/hugo/identity"
+	"github.com/gohugoio/hugo/hugofs/files"
 	"github.com/gohugoio/hugo/markup/converter"
 	"github.com/gohugoio/hugo/markup/tableofcontents"
-
-	"github.com/gohugoio/hugo/hugofs/files"
-	"github.com/gohugoio/hugo/tpl"
 
 	"github.com/gohugoio/hugo/hugofs"
 
@@ -34,6 +31,7 @@ import (
 
 	"github.com/gohugoio/hugo/common/hugo"
 	"github.com/gohugoio/hugo/common/maps"
+	"github.com/gohugoio/hugo/common/paths"
 	"github.com/gohugoio/hugo/source"
 
 	"github.com/gohugoio/hugo/config"
@@ -46,6 +44,8 @@ import (
 var (
 	NopPage                 Page            = new(nopPage)
 	NopContentRenderer      ContentRenderer = new(nopContentRenderer)
+	NopMarkup               Markup          = new(nopMarkup)
+	NopContent              Content         = new(nopContent)
 	NopCPageContentRenderer                 = struct {
 		OutputFormatPageContentProvider
 		ContentRenderer
@@ -58,6 +58,8 @@ var (
 
 // PageNop implements Page, but does nothing.
 type nopPage int
+
+var noOpPathInfo = media.DefaultPathParser.Parse(files.ComponentFolderContent, "no-op.md")
 
 func (p *nopPage) Err() resource.ResourceError {
 	return nil
@@ -79,10 +81,12 @@ func (p *nopPage) RSSLink() template.URL {
 	return ""
 }
 
+// Deprecated: Use taxonomies instead.
 func (p *nopPage) Author() Author {
 	return Author{}
 }
 
+// Deprecated: Use taxonomies instead.
 func (p *nopPage) Authors() AuthorList {
 	return nil
 }
@@ -103,11 +107,19 @@ func (p *nopPage) BaseFileName() string {
 	return ""
 }
 
-func (p *nopPage) BundleType() files.ContentClass {
+func (p *nopPage) BundleType() string {
 	return ""
 }
 
+func (p *nopPage) Markup(...any) Markup {
+	return NopMarkup
+}
+
 func (p *nopPage) Content(context.Context) (any, error) {
+	return "", nil
+}
+
+func (p *nopPage) ContentWithoutSummary(ctx context.Context) (template.HTML, error) {
 	return "", nil
 }
 
@@ -163,10 +175,8 @@ func (p *nopPage) Extension() string {
 	return ""
 }
 
-var nilFile *source.FileInfo
-
-func (p *nopPage) File() source.File {
-	return nilFile
+func (p *nopPage) File() *source.File {
+	return nil
 }
 
 func (p *nopPage) FileInfo() hugofs.FileMetaInfo {
@@ -186,10 +196,6 @@ func (p *nopPage) FuzzyWordCount(context.Context) int {
 }
 
 func (p *nopPage) GetPage(ref string) (Page, error) {
-	return nil, nil
-}
-
-func (p *nopPage) GetPageWithTemplateInfo(info tpl.Info, ref string) (Page, error) {
 	return nil, nil
 }
 
@@ -221,16 +227,16 @@ func (p *nopPage) Hugo() (h hugo.HugoInfo) {
 	return
 }
 
-func (p *nopPage) InSection(other any) (bool, error) {
-	return false, nil
+func (p *nopPage) InSection(other any) bool {
+	return false
 }
 
-func (p *nopPage) IsAncestor(other any) (bool, error) {
-	return false, nil
+func (p *nopPage) IsAncestor(other any) bool {
+	return false
 }
 
-func (p *nopPage) IsDescendant(other any) (bool, error) {
-	return false, nil
+func (p *nopPage) IsDescendant(other any) bool {
+	return false
 }
 
 func (p *nopPage) IsDraft() bool {
@@ -357,8 +363,8 @@ func (p *nopPage) Path() string {
 	return ""
 }
 
-func (p *nopPage) Pathc() string {
-	return ""
+func (p *nopPage) PathInfo() *paths.Path {
+	return noOpPathInfo
 }
 
 func (p *nopPage) Permalink() string {
@@ -529,13 +535,10 @@ func (p *nopPage) WordCount(context.Context) int {
 	return 0
 }
 
-func (p *nopPage) GetIdentity() identity.Identity {
-	return identity.NewPathIdentity("content", "foo/bar.md")
-}
-
 func (p *nopPage) Fragments(context.Context) *tableofcontents.Fragments {
 	return nil
 }
+
 func (p *nopPage) HeadingsFiltered(context.Context) tableofcontents.Headings {
 	return nil
 }
@@ -550,6 +553,73 @@ func (r *nopContentRenderer) ParseAndRenderContent(ctx context.Context, content 
 func (r *nopContentRenderer) ParseContent(ctx context.Context, content []byte) (converter.ResultParse, bool, error) {
 	return nil, false, nil
 }
+
 func (r *nopContentRenderer) RenderContent(ctx context.Context, content []byte, doc any) (converter.ResultRender, bool, error) {
 	return nil, false, nil
+}
+
+type (
+	nopMarkup  int
+	nopContent int
+)
+
+var (
+	_ Markup  = (*nopMarkup)(nil)
+	_ Content = (*nopContent)(nil)
+)
+
+func (c *nopMarkup) Render(context.Context) (Content, error) {
+	return NopContent, nil
+}
+
+func (c *nopMarkup) RenderString(ctx context.Context, args ...any) (template.HTML, error) {
+	return "", nil
+}
+
+func (c *nopMarkup) RenderShortcodes(context.Context) (template.HTML, error) {
+	return "", nil
+}
+
+func (c *nopContent) Plain(context.Context) string {
+	return ""
+}
+
+func (c *nopContent) PlainWords(context.Context) []string {
+	return nil
+}
+
+func (c *nopContent) WordCount(context.Context) int {
+	return 0
+}
+
+func (c *nopContent) FuzzyWordCount(context.Context) int {
+	return 0
+}
+
+func (c *nopContent) ReadingTime(context.Context) int {
+	return 0
+}
+
+func (c *nopContent) Len(context.Context) int {
+	return 0
+}
+
+func (c *nopContent) Content(context.Context) (template.HTML, error) {
+	return "", nil
+}
+
+func (c *nopContent) ContentWithoutSummary(context.Context) (template.HTML, error) {
+	return "", nil
+}
+
+func (c *nopMarkup) Fragments(context.Context) *tableofcontents.Fragments {
+	return nil
+}
+
+func (c *nopMarkup) FragmentsHTML(context.Context) template.HTML {
+	return ""
+}
+
+func (c *nopContent) Summary(context.Context) (Summary, error) {
+	return Summary{}, nil
 }

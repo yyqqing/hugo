@@ -15,10 +15,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-
-	"github.com/gohugoio/hugo/tpl/internal/go_templates/cfg"
-
-	//"internal/platform"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +23,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/gohugoio/hugo/tpl/internal/go_templates/cfg"
 )
 
 // Save the original environment during init for use in checks. A test
@@ -45,8 +43,8 @@ func Builder() string {
 
 // HasGoBuild reports whether the current system can build programs with “go build”
 // and then run them with os.StartProcess or exec.Command.
+// Modified by Hugo (not needed)
 func HasGoBuild() bool {
-	// Modified by Hugo (not needed)
 	return false
 }
 
@@ -69,13 +67,13 @@ func MustHaveGoBuild(t testing.TB) {
 	}
 }
 
-// HasGoRun reports whether the current system can run programs with “go run.”
+// HasGoRun reports whether the current system can run programs with “go run”.
 func HasGoRun() bool {
 	// For now, having go run and having go build are the same.
 	return HasGoBuild()
 }
 
-// MustHaveGoRun checks that the current system can run programs with “go run.”
+// MustHaveGoRun checks that the current system can run programs with “go run”.
 // If not, MustHaveGoRun calls t.Skip with an explanation.
 func MustHaveGoRun(t testing.TB) {
 	if !HasGoRun() {
@@ -134,15 +132,13 @@ func findGOROOT() (string, error) {
 			// If runtime.GOROOT() is non-empty, assume that it is valid.
 			//
 			// (It might not be: for example, the user may have explicitly set GOROOT
-			// to the wrong directory, or explicitly set GOROOT_FINAL but not GOROOT
-			// and hasn't moved the tree to GOROOT_FINAL yet. But those cases are
+			// to the wrong directory. But this case is
 			// rare, and if that happens the user can fix what they broke.)
 			return
 		}
 
 		// runtime.GOROOT doesn't know where GOROOT is (perhaps because the test
-		// binary was built with -trimpath, or perhaps because GOROOT_FINAL was set
-		// without GOROOT and the tree hasn't been moved there yet).
+		// binary was built with -trimpath).
 		//
 		// Since this is internal/testenv, we can cheat and assume that the caller
 		// is a test of some package in a subdirectory of GOROOT/src. ('go test'
@@ -300,8 +296,8 @@ func MustHaveCGO(t testing.TB) {
 
 // CanInternalLink reports whether the current system can link programs with
 // internal linking.
+// Modified by Hugo (not needed)
 func CanInternalLink(withCgo bool) bool {
-	// Modified by Hugo (not needed)
 	return false
 }
 
@@ -317,11 +313,18 @@ func MustInternalLink(t testing.TB, withCgo bool) {
 	}
 }
 
+// MustInternalLinkPIE checks whether the current system can link PIE binary using
+// internal linking.
+// If not, MustInternalLinkPIE calls t.Skip with an explanation.
+// Modified by Hugo (not needed)
+func MustInternalLinkPIE(t testing.TB) {
+}
+
 // MustHaveBuildMode reports whether the current system can build programs in
 // the given build mode.
 // If not, MustHaveBuildMode calls t.Skip with an explanation.
+// Modified by Hugo (not needed)
 func MustHaveBuildMode(t testing.TB, buildmode string) {
-	// Modified by Hugo (not needed)
 }
 
 // HasSymlink reports whether the current system can use os.Symlink.
@@ -438,7 +441,7 @@ func WriteImportcfg(t testing.TB, dstPath string, packageFiles map[string]string
 		}
 	}
 
-	if err := os.WriteFile(dstPath, icfg.Bytes(), 0666); err != nil {
+	if err := os.WriteFile(dstPath, icfg.Bytes(), 0o666); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -447,4 +450,11 @@ func WriteImportcfg(t testing.TB, dstPath string, packageFiles map[string]string
 // not supported by the current platform or execution environment.
 func SyscallIsNotSupported(err error) bool {
 	return syscallIsNotSupported(err)
+}
+
+// ParallelOn64Bit calls t.Parallel() unless there is a case that cannot be parallel.
+// This function should be used when it is necessary to avoid t.Parallel on
+// 32-bit machines, typically because the test uses lots of memory.
+// Disabled by Hugo.
+func ParallelOn64Bit(t *testing.T) {
 }

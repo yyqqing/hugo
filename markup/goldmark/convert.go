@@ -17,23 +17,29 @@ package goldmark
 import (
 	"bytes"
 
-	"github.com/gohugoio/hugo/identity"
-
+	"github.com/gohugoio/hugo-goldmark-extensions/extras"
+	"github.com/gohugoio/hugo/markup/goldmark/blockquotes"
 	"github.com/gohugoio/hugo/markup/goldmark/codeblocks"
 	"github.com/gohugoio/hugo/markup/goldmark/goldmark_config"
+	"github.com/gohugoio/hugo/markup/goldmark/hugocontext"
 	"github.com/gohugoio/hugo/markup/goldmark/images"
 	"github.com/gohugoio/hugo/markup/goldmark/internal/extensions/attributes"
 	"github.com/gohugoio/hugo/markup/goldmark/internal/render"
+	"github.com/gohugoio/hugo/markup/goldmark/passthrough"
+	"github.com/gohugoio/hugo/markup/goldmark/tables"
+	"github.com/yuin/goldmark/util"
 
-	"github.com/gohugoio/hugo/markup/converter"
-	"github.com/gohugoio/hugo/markup/tableofcontents"
 	"github.com/yuin/goldmark"
+	emoji "github.com/yuin/goldmark-emoji"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/renderer"
 	"github.com/yuin/goldmark/renderer/html"
 	"github.com/yuin/goldmark/text"
+
+	"github.com/gohugoio/hugo/markup/converter"
+	"github.com/gohugoio/hugo/markup/tableofcontents"
 )
 
 const (
@@ -91,15 +97,34 @@ func newMarkdown(pcfg converter.ProviderConfig) goldmark.Markdown {
 		rendererOptions = append(rendererOptions, html.WithUnsafe())
 	}
 
+	tocRendererOptions := make([]renderer.Option, len(rendererOptions))
+	if rendererOptions != nil {
+		copy(tocRendererOptions, rendererOptions)
+	}
+	tocRendererOptions = append(tocRendererOptions,
+		renderer.WithNodeRenderers(util.Prioritized(extension.NewStrikethroughHTMLRenderer(), 500)),
+		renderer.WithNodeRenderers(util.Prioritized(emoji.NewHTMLRenderer(), 200)))
 	var (
 		extensions = []goldmark.Extender{
+			hugocontext.New(),
 			newLinks(cfg),
-			newTocExtension(rendererOptions),
+			newTocExtension(tocRendererOptions),
+			blockquotes.New(),
 		}
 		parserOptions []parser.Option
 	)
 
 	extensions = append(extensions, images.New(cfg.Parser.WrapStandAloneImageWithinParagraph))
+
+	extensions = append(extensions, extras.New(
+		extras.Config{
+			Delete:      extras.DeleteConfig{Enable: cfg.Extensions.Extras.Delete.Enable},
+			Insert:      extras.InsertConfig{Enable: cfg.Extensions.Extras.Insert.Enable},
+			Mark:        extras.MarkConfig{Enable: cfg.Extensions.Extras.Mark.Enable},
+			Subscript:   extras.SubscriptConfig{Enable: cfg.Extensions.Extras.Subscript.Enable},
+			Superscript: extras.SuperscriptConfig{Enable: cfg.Extensions.Extras.Superscript.Enable},
+		},
+	))
 
 	if mcfg.Highlight.CodeFences {
 		extensions = append(extensions, codeblocks.New())
@@ -107,6 +132,7 @@ func newMarkdown(pcfg converter.ProviderConfig) goldmark.Markdown {
 
 	if cfg.Extensions.Table {
 		extensions = append(extensions, extension.Table)
+		extensions = append(extensions, tables.New())
 	}
 
 	if cfg.Extensions.Strikethrough {
@@ -139,7 +165,11 @@ func newMarkdown(pcfg converter.ProviderConfig) goldmark.Markdown {
 	if cfg.Extensions.CJK.Enable {
 		opts := []extension.CJKOption{}
 		if cfg.Extensions.CJK.EastAsianLineBreaks {
-			opts = append(opts, extension.WithEastAsianLineBreaks())
+			if cfg.Extensions.CJK.EastAsianLineBreaksStyle == "css3draft" {
+				opts = append(opts, extension.WithEastAsianLineBreaks(extension.EastAsianLineBreaksCSS3Draft))
+			} else {
+				opts = append(opts, extension.WithEastAsianLineBreaks())
+			}
 		}
 
 		if cfg.Extensions.CJK.EscapedSpace {
@@ -149,6 +179,14 @@ func newMarkdown(pcfg converter.ProviderConfig) goldmark.Markdown {
 		extensions = append(extensions, c)
 	}
 
+	if cfg.Extensions.Passthrough.Enable {
+		extensions = append(extensions, passthrough.New(cfg.Extensions.Passthrough))
+	}
+
+	if pcfg.Conf.EnableEmoji() {
+		extensions = append(extensions, emoji.Emoji)
+	}
+
 	if cfg.Parser.AutoHeadingID {
 		parserOptions = append(parserOptions, parser.WithAutoHeadingID())
 	}
@@ -156,6 +194,7 @@ func newMarkdown(pcfg converter.ProviderConfig) goldmark.Markdown {
 	if cfg.Parser.Attribute.Title {
 		parserOptions = append(parserOptions, parser.WithAttribute())
 	}
+
 	if cfg.Parser.Attribute.Block {
 		extensions = append(extensions, attributes.New())
 	}
@@ -175,8 +214,6 @@ func newMarkdown(pcfg converter.ProviderConfig) goldmark.Markdown {
 	return md
 }
 
-var _ identity.IdentitiesProvider = (*converterResult)(nil)
-
 type parserResult struct {
 	doc any
 	toc *tableofcontents.Fragments
@@ -192,24 +229,16 @@ func (p parserResult) TableOfContents() *tableofcontents.Fragments {
 
 type renderResult struct {
 	converter.ResultRender
-	ids identity.Identities
-}
-
-func (r renderResult) GetIdentities() identity.Identities {
-	return r.ids
 }
 
 type converterResult struct {
 	converter.ResultRender
 	tableOfContentsProvider
-	identity.IdentitiesProvider
 }
 
 type tableOfContentsProvider interface {
 	TableOfContents() *tableofcontents.Fragments
 }
-
-var converterIdentity = identity.KeyValueIdentity{Key: "goldmark", Value: "converter"}
 
 func (c *goldmarkConverter) Parse(ctx converter.RenderContext) (converter.ResultParse, error) {
 	pctx := c.newParserContext(ctx)
@@ -224,8 +253,8 @@ func (c *goldmarkConverter) Parse(ctx converter.RenderContext) (converter.Result
 		doc: doc,
 		toc: pctx.TableOfContents(),
 	}, nil
-
 }
+
 func (c *goldmarkConverter) Render(ctx converter.RenderContext, doc any) (converter.ResultRender, error) {
 	n := doc.(ast.Node)
 	buf := &render.BufWriter{Buffer: &bytes.Buffer{}}
@@ -233,7 +262,6 @@ func (c *goldmarkConverter) Render(ctx converter.RenderContext, doc any) (conver
 	rcx := &render.RenderContextDataHolder{
 		Rctx: ctx,
 		Dctx: c.ctx,
-		IDs:  identity.NewManager(converterIdentity),
 	}
 
 	w := &render.Context{
@@ -247,9 +275,7 @@ func (c *goldmarkConverter) Render(ctx converter.RenderContext, doc any) (conver
 
 	return renderResult{
 		ResultRender: buf,
-		ids:          rcx.IDs.GetIdentities(),
 	}, nil
-
 }
 
 func (c *goldmarkConverter) Convert(ctx converter.RenderContext) (converter.ResultRender, error) {
@@ -264,17 +290,7 @@ func (c *goldmarkConverter) Convert(ctx converter.RenderContext) (converter.Resu
 	return converterResult{
 		ResultRender:            renderResult,
 		tableOfContentsProvider: parseResult,
-		IdentitiesProvider:      renderResult.(identity.IdentitiesProvider),
 	}, nil
-
-}
-
-var featureSet = map[identity.Identity]bool{
-	converter.FeatureRenderHooks: true,
-}
-
-func (c *goldmarkConverter) Supports(feature identity.Identity) bool {
-	return featureSet[feature.GetIdentity()]
 }
 
 func (c *goldmarkConverter) newParserContext(rctx converter.RenderContext) *parserContext {
@@ -311,5 +327,4 @@ func toTypographicPunctuationMap(t goldmark_config.Typographer) map[extension.Ty
 		extension.RightAngleQuote:  []byte(t.RightAngleQuote),
 		extension.Apostrophe:       []byte(t.Apostrophe),
 	}
-
 }

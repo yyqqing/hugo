@@ -11,14 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
-	"sort"
-	"strconv"
 	"strings"
 	"testing"
 	"text/template"
 	"time"
-	"unicode/utf8"
 
 	"github.com/gohugoio/hugo/config/allconfig"
 	"github.com/gohugoio/hugo/config/security"
@@ -43,7 +39,6 @@ import (
 	"github.com/spf13/cast"
 
 	"github.com/gohugoio/hugo/helpers"
-	"github.com/gohugoio/hugo/tpl"
 
 	"github.com/gohugoio/hugo/resources/resource"
 
@@ -118,6 +113,7 @@ type filenameContent struct {
 func newTestSitesBuilder(t testing.TB) *sitesBuilder {
 	v := config.New()
 	v.Set("publishDir", "public")
+	v.Set("disableLiveReload", true)
 	fs := hugofs.NewFromOld(afero.NewMemMapFs(), v)
 
 	litterOptions := litter.Options{
@@ -262,7 +258,6 @@ id = "UA-ga_id"
 disable = false
 [privacy.googleAnalytics]
 respectDoNotTrack = true
-anonymizeIP = true
 [privacy.instagram]
 simple = true
 [privacy.twitter]
@@ -297,10 +292,12 @@ func (s *sitesBuilder) WithDefaultMultiSiteConfig() *sitesBuilder {
 	defaultMultiSiteConfig := `
 baseURL = "http://example.com/blog"
 
-paginate = 1
 disablePathToLower = true
 defaultContentLanguage = "en"
 defaultContentLanguageInSubdir = true
+
+[pagination]
+pagerSize = 1
 
 [permalinks]
 other = "/somewhere/else/:filename"
@@ -329,7 +326,8 @@ plaque = "plaques"
 weight = 30
 title = "På nynorsk"
 languageName = "Nynorsk"
-paginatePath = "side"
+[Languages.nn.pagination]
+path = "side"
 [Languages.nn.Taxonomies]
 lag = "lag"
 [[Languages.nn.menu.main]]
@@ -341,7 +339,8 @@ weight = 1
 weight = 40
 title = "På bokmål"
 languageName = "Bokmål"
-paginatePath = "side"
+[Languages.nb.pagination]
+path = "side"
 [Languages.nb.Taxonomies]
 lag = "lag"
 ` + commonConfigSections
@@ -522,7 +521,7 @@ func (s *sitesBuilder) CreateSitesE() error {
 				"data",
 				"i18n",
 			} {
-				if err := os.MkdirAll(filepath.Join(s.workingDir, dir), 0777); err != nil {
+				if err := os.MkdirAll(filepath.Join(s.workingDir, dir), 0o777); err != nil {
 					return fmt.Errorf("failed to create %q: %w", dir, err)
 				}
 			}
@@ -555,7 +554,6 @@ func (s *sitesBuilder) CreateSitesE() error {
 	depsCfg.TestLogger = s.logger
 
 	sites, err := NewHugoSites(depsCfg)
-
 	if err != nil {
 		return fmt.Errorf("failed to create sites: %w", err)
 	}
@@ -720,6 +718,9 @@ func (s *sitesBuilder) DumpTxtar() string {
 	skipRe := regexp.MustCompile(`^(public|resources|package-lock.json|go.sum)`)
 
 	afero.Walk(s.Fs.Source, s.workingDir, func(path string, info fs.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
 		rel := strings.TrimPrefix(path, s.workingDir+"/")
 		if skipRe.MatchString(rel) {
 			if info.IsDir() {
@@ -756,7 +757,7 @@ func (s *sitesBuilder) AssertFileContent(filename string, matches ...string) {
 				continue
 			}
 			if !strings.Contains(content, match) {
-				s.Fatalf("No match for \n%q in content\n%q\nin file %s\n", match, content, filename)
+				s.Assert(content, qt.Contains, match, qt.Commentf(match+" not in: \n"+content))
 			}
 		}
 	}
@@ -821,13 +822,13 @@ func (s *sitesBuilder) CheckExists(filename string) bool {
 }
 
 func (s *sitesBuilder) GetPage(ref string) page.Page {
-	p, err := s.H.Sites[0].getPageNew(nil, ref)
+	p, err := s.H.Sites[0].getPage(nil, ref)
 	s.Assert(err, qt.IsNil)
 	return p
 }
 
 func (s *sitesBuilder) GetPageRel(p page.Page, ref string) page.Page {
-	p, err := s.H.Sites[0].getPageNew(p, ref)
+	p, err := s.H.Sites[0].getPage(p, ref)
 	s.Assert(err, qt.IsNil)
 	return p
 }
@@ -837,7 +838,7 @@ func (s *sitesBuilder) NpmInstall() hexec.Runner {
 	var err error
 	sc.Exec.Allow, err = security.NewWhitelist("npm")
 	s.Assert(err, qt.IsNil)
-	ex := hexec.New(sc)
+	ex := hexec.New(sc, s.workingDir)
 	command, err := ex.New("npm", "install")
 	s.Assert(err, qt.IsNil)
 	return command
@@ -878,20 +879,6 @@ func (th testHelper) assertFileContent(filename string, matches ...string) {
 	}
 }
 
-func (th testHelper) assertFileContentRegexp(filename string, matches ...string) {
-	filename = th.replaceDefaultContentLanguageValue(filename)
-	content := readWorkingDir(th, th.Fs, filename)
-	for _, match := range matches {
-		match = th.replaceDefaultContentLanguageValue(match)
-		r := regexp.MustCompile(match)
-		matches := r.MatchString(content)
-		if !matches {
-			fmt.Println("Expected to match regexp:\n"+match+"\nGot:\n", content)
-		}
-		th.Assert(matches, qt.Equals, true)
-	}
-}
-
 func (th testHelper) assertFileNotExist(filename string) {
 	exists, err := helpers.Exists(filename, th.Fs.PublishDir)
 	th.Assert(err, qt.IsNil)
@@ -908,30 +895,14 @@ func (th testHelper) replaceDefaultContentLanguageValue(value string) string {
 	return value
 }
 
-func loadTestConfig(fs afero.Fs) (*allconfig.Configs, error) {
-	res, err := allconfig.LoadConfig(allconfig.ConfigSourceDescriptor{Fs: fs})
-	return res, err
-}
-
 func loadTestConfigFromProvider(cfg config.Provider) (*allconfig.Configs, error) {
 	workingDir := cfg.GetString("workingDir")
 	fs := afero.NewMemMapFs()
 	if workingDir != "" {
-		fs.MkdirAll(workingDir, 0755)
+		fs.MkdirAll(workingDir, 0o755)
 	}
 	res, err := allconfig.LoadConfig(allconfig.ConfigSourceDescriptor{Flags: cfg, Fs: fs})
 	return res, err
-}
-
-func newTestCfgBasic() (config.Provider, *hugofs.Fs) {
-	mm := afero.NewMemMapFs()
-	v := config.New()
-	v.Set("publishDir", "public")
-	v.Set("defaultContentLanguageInSubdir", true)
-
-	fs := hugofs.NewFromOld(hugofs.NewBaseFileDecorator(mm), v)
-
-	return v, fs
 }
 
 func newTestCfg(withConfig ...func(cfg config.Provider) error) (config.Provider, *hugofs.Fs) {
@@ -970,18 +941,6 @@ func newTestSitesFromConfig(t testing.TB, afs afero.Fs, tomlConfig string, layou
 	c.Assert(err, qt.IsNil)
 
 	return th, h
-}
-
-func createWithTemplateFromNameValues(additionalTemplates ...string) func(templ tpl.TemplateManager) error {
-	return func(templ tpl.TemplateManager) error {
-		for i := 0; i < len(additionalTemplates); i += 2 {
-			err := templ.AddTemplate(additionalTemplates[i], additionalTemplates[i+1])
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	}
 }
 
 // TODO(bep) replace these with the builder
@@ -1043,107 +1002,4 @@ func content(c resource.ContentProvider) string {
 		panic(err)
 	}
 	return ccs
-}
-
-func pagesToString(pages ...page.Page) string {
-	var paths []string
-	for _, p := range pages {
-		paths = append(paths, p.Pathc())
-	}
-	sort.Strings(paths)
-	return strings.Join(paths, "|")
-}
-
-func dumpPagesLinks(pages ...page.Page) {
-	var links []string
-	for _, p := range pages {
-		links = append(links, p.RelPermalink())
-	}
-	sort.Strings(links)
-
-	for _, link := range links {
-		fmt.Println(link)
-	}
-}
-
-func dumpPages(pages ...page.Page) {
-	fmt.Println("---------")
-	for _, p := range pages {
-		fmt.Printf("Kind: %s Title: %-10s RelPermalink: %-10s Path: %-10s sections: %s Lang: %s\n",
-			p.Kind(), p.Title(), p.RelPermalink(), p.Pathc(), p.SectionsPath(), p.Lang())
-	}
-}
-
-func dumpSPages(pages ...*pageState) {
-	for i, p := range pages {
-		fmt.Printf("%d: Kind: %s Title: %-10s RelPermalink: %-10s Path: %-10s sections: %s\n",
-			i+1,
-			p.Kind(), p.Title(), p.RelPermalink(), p.Pathc(), p.SectionsPath())
-	}
-}
-
-func printStringIndexes(s string) {
-	lines := strings.Split(s, "\n")
-	i := 0
-
-	for _, line := range lines {
-
-		for _, r := range line {
-			fmt.Printf("%-3s", strconv.Itoa(i))
-			i += utf8.RuneLen(r)
-		}
-		i++
-		fmt.Println()
-		for _, r := range line {
-			fmt.Printf("%-3s", string(r))
-		}
-		fmt.Println()
-
-	}
-}
-
-// See https://github.com/golang/go/issues/19280
-// Not in use.
-var parallelEnabled = true
-
-func parallel(t *testing.T) {
-	if parallelEnabled {
-		t.Parallel()
-	}
-}
-
-func skipSymlink(t *testing.T) {
-	if runtime.GOOS == "windows" && os.Getenv("CI") == "" {
-		t.Skip("skip symlink test on local Windows (needs admin)")
-	}
-}
-
-func captureStderr(f func() error) (string, error) {
-	old := os.Stderr
-	r, w, _ := os.Pipe()
-	os.Stderr = w
-
-	err := f()
-
-	w.Close()
-	os.Stderr = old
-
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
-	return buf.String(), err
-}
-
-func captureStdout(f func() error) (string, error) {
-	old := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	err := f()
-
-	w.Close()
-	os.Stdout = old
-
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
-	return buf.String(), err
 }

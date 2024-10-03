@@ -1,4 +1,4 @@
-// Copyright 2023 The Hugo Authors. All rights reserved.
+// Copyright 2024 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -62,6 +62,7 @@ removed from Hugo, but we need to test this out in "real life" to get a feel of 
 so this may/will change in future versions of Hugo.
 `,
 				withc: func(cmd *cobra.Command, r *rootCommand) {
+					cmd.ValidArgsFunction = cobra.NoFileCompletions
 					applyLocalFlagsBuildConfig(cmd, r)
 				},
 				run: func(ctx context.Context, cd *simplecobra.Commandeer, r *rootCommand, args []string) error {
@@ -69,7 +70,7 @@ so this may/will change in future versions of Hugo.
 					if err != nil {
 						return err
 					}
-					return npm.Pack(h.BaseFs.SourceFs, h.BaseFs.Assets.Dirs)
+					return npm.Pack(h.BaseFs.ProjectSourceFs, h.BaseFs.AssetsWithDuplicatesPreserved.Fs)
 				},
 			},
 		},
@@ -89,10 +90,11 @@ so this may/will change in future versions of Hugo.
 	inside a subfolder on GitHub, as one example.
 	`,
 				withc: func(cmd *cobra.Command, r *rootCommand) {
+					cmd.ValidArgsFunction = cobra.NoFileCompletions
 					applyLocalFlagsBuildConfig(cmd, r)
 				},
 				run: func(ctx context.Context, cd *simplecobra.Commandeer, r *rootCommand, args []string) error {
-					h, err := r.Hugo(flagsToCfg(cd, nil))
+					h, err := r.getOrCreateHugo(flagsToCfg(cd, nil), true)
 					if err != nil {
 						return err
 					}
@@ -100,7 +102,11 @@ so this may/will change in future versions of Hugo.
 					if len(args) >= 1 {
 						initPath = args[0]
 					}
-					return h.Configs.ModulesClient.Init(initPath)
+					c := h.Configs.ModulesClient
+					if err := c.Init(initPath); err != nil {
+						return err
+					}
+					return nil
 				},
 			},
 			&simpleCommand{
@@ -108,11 +114,12 @@ so this may/will change in future versions of Hugo.
 				short: "Verify dependencies.",
 				long:  `Verify checks that the dependencies of the current module, which are stored in a local downloaded source cache, have not been modified since being downloaded.`,
 				withc: func(cmd *cobra.Command, r *rootCommand) {
+					cmd.ValidArgsFunction = cobra.NoFileCompletions
 					applyLocalFlagsBuildConfig(cmd, r)
 					cmd.Flags().BoolVarP(&clean, "clean", "", false, "delete module cache for dependencies that fail verification")
 				},
 				run: func(ctx context.Context, cd *simplecobra.Commandeer, r *rootCommand, args []string) error {
-					conf, err := r.ConfigFromProvider(r.configVersionID.Load(), flagsToCfg(cd, nil))
+					conf, err := r.ConfigFromProvider(configKey{counter: r.configVersionID.Load()}, flagsToCfg(cd, nil))
 					if err != nil {
 						return err
 					}
@@ -127,11 +134,12 @@ so this may/will change in future versions of Hugo.
 Note that for vendored modules, that is the version listed and not the one from go.mod.
 `,
 				withc: func(cmd *cobra.Command, r *rootCommand) {
+					cmd.ValidArgsFunction = cobra.NoFileCompletions
 					applyLocalFlagsBuildConfig(cmd, r)
 					cmd.Flags().BoolVarP(&clean, "clean", "", false, "delete module cache for dependencies that fail verification")
 				},
 				run: func(ctx context.Context, cd *simplecobra.Commandeer, r *rootCommand, args []string) error {
-					conf, err := r.ConfigFromProvider(r.configVersionID.Load(), flagsToCfg(cd, nil))
+					conf, err := r.ConfigFromProvider(configKey{counter: r.configVersionID.Load()}, flagsToCfg(cd, nil))
 					if err != nil {
 						return err
 					}
@@ -144,8 +152,10 @@ Note that for vendored modules, that is the version listed and not the one from 
 				short: "Delete the Hugo Module cache for the current project.",
 				long:  `Delete the Hugo Module cache for the current project.`,
 				withc: func(cmd *cobra.Command, r *rootCommand) {
+					cmd.ValidArgsFunction = cobra.NoFileCompletions
 					applyLocalFlagsBuildConfig(cmd, r)
 					cmd.Flags().StringVarP(&pattern, "pattern", "", "", `pattern matching module paths to clean (all if not set), e.g. "**hugo*"`)
+					_ = cmd.RegisterFlagCompletionFunc("pattern", cobra.NoFileCompletions)
 					cmd.Flags().BoolVarP(&all, "all", "", false, "clean entire module cache")
 				},
 				run: func(ctx context.Context, cd *simplecobra.Commandeer, r *rootCommand, args []string) error {
@@ -167,6 +177,7 @@ Note that for vendored modules, that is the version listed and not the one from 
 				name:  "tidy",
 				short: "Remove unused entries in go.mod and go.sum.",
 				withc: func(cmd *cobra.Command, r *rootCommand) {
+					cmd.ValidArgsFunction = cobra.NoFileCompletions
 					applyLocalFlagsBuildConfig(cmd, r)
 				},
 				run: func(ctx context.Context, cd *simplecobra.Commandeer, r *rootCommand, args []string) error {
@@ -184,6 +195,7 @@ Note that for vendored modules, that is the version listed and not the one from 
 	If a module is vendored, that is where Hugo will look for it's dependencies.
 	`,
 				withc: func(cmd *cobra.Command, r *rootCommand) {
+					cmd.ValidArgsFunction = cobra.NoFileCompletions
 					applyLocalFlagsBuildConfig(cmd, r)
 				},
 				run: func(ctx context.Context, cd *simplecobra.Commandeer, r *rootCommand, args []string) error {
@@ -211,7 +223,12 @@ Install a specific version:
 
     hugo mod get github.com/gohugoio/testshortcodes@v0.3.0
 
-Install the latest versions of all module dependencies:
+Install the latest versions of all direct module dependencies:
+
+    hugo mod get
+    hugo mod get ./... (recursive)
+
+Install the latest versions of all module dependencies (direct and indirect):
 
     hugo mod get -u
     hugo mod get -u ./... (recursive)
@@ -220,6 +237,7 @@ Run "go help get" for more information. All flags available for "go get" is also
 ` + commonUsageMod,
 				withc: func(cmd *cobra.Command, r *rootCommand) {
 					cmd.DisableFlagParsing = true
+					cmd.ValidArgsFunction = cobra.NoFileCompletions
 				},
 				run: func(ctx context.Context, cd *simplecobra.Commandeer, r *rootCommand, args []string) error {
 					// We currently just pass on the flags we get to Go and
@@ -254,13 +272,14 @@ Run "go help get" for more information. All flags available for "go get" is also
 							if info.Name() == "go.mod" {
 								// Found a module.
 								dir := filepath.Dir(path)
-								r.Println("Update module in", dir)
+
 								cfg := config.New()
 								cfg.Set("workingDir", dir)
-								conf, err := r.ConfigFromProvider(r.configVersionID.Load(), flagsToCfg(cd, cfg))
+								conf, err := r.ConfigFromProvider(configKey{counter: r.configVersionID.Add(1)}, flagsToCfg(cd, cfg))
 								if err != nil {
 									return err
 								}
+								r.Println("Update module in", conf.configs.Base.WorkingDir)
 								client := conf.configs.ModulesClient
 								return client.Get(args...)
 
@@ -269,7 +288,7 @@ Run "go help get" for more information. All flags available for "go get" is also
 						})
 						return nil
 					} else {
-						conf, err := r.ConfigFromProvider(r.configVersionID.Load(), flagsToCfg(cd, nil))
+						conf, err := r.ConfigFromProvider(configKey{counter: r.configVersionID.Load()}, flagsToCfg(cd, nil))
 						if err != nil {
 							return err
 						}
@@ -281,7 +300,6 @@ Run "go help get" for more information. All flags available for "go get" is also
 			npmCommand,
 		},
 	}
-
 }
 
 type modCommands struct {
@@ -299,11 +317,11 @@ func (c *modCommands) Name() string {
 }
 
 func (c *modCommands) Run(ctx context.Context, cd *simplecobra.Commandeer, args []string) error {
-	_, err := c.r.ConfigFromProvider(c.r.configVersionID.Load(), nil)
+	_, err := c.r.ConfigFromProvider(configKey{counter: c.r.configVersionID.Load()}, nil)
 	if err != nil {
 		return err
 	}
-	//config := conf.configs.Base
+	// config := conf.configs.Base
 
 	return nil
 }

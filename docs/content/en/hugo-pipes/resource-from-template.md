@@ -9,7 +9,10 @@ menu:
     parent: hugo-pipes
     weight: 120
 weight: 120
-signature: ["resources.ExecuteAsTemplate TARGET_PATH CONTEXT RESOURCE"]
+action:
+  aliases: []
+  returnType: resource.Resource
+  signatures: [resources.ExecuteAsTemplate TARGETPATH CONTEXT RESOURCE]
 ---
 
 ## Usage
@@ -31,5 +34,5 @@ body{
 
 ```go-html-template
 {{ $sassTemplate := resources.Get "sass/template.scss" }}
-{{ $style := $sassTemplate | resources.ExecuteAsTemplate "main.scss" . | resources.ToCSS }}
+{{ $style := $sassTemplate | resources.ExecuteAsTemplate "main.scss" . | css.Sass }}
 ```

@@ -1,4 +1,4 @@
-// Copyright 2022 The Hugo Authors. All rights reserved.
+// Copyright 2024 The Hugo Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@ import (
 	"github.com/gohugoio/hugo/common/hugo"
 	"github.com/gohugoio/hugo/common/paths"
 	"github.com/gohugoio/hugo/htesting"
+	"github.com/gohugoio/hugo/identity"
 	"github.com/gohugoio/hugo/media"
 
 	"github.com/gohugoio/hugo/resources"
@@ -38,7 +39,7 @@ import (
 	"github.com/bep/godartsass/v2"
 )
 
-// Supports returns whether dart-sass-embedded is found in $PATH.
+// Supports returns whether sass, dart-sass, or dart-sass-embedded is found in $PATH.
 func Supports() bool {
 	if htesting.SupportsAll() {
 		return true
@@ -80,8 +81,9 @@ func (t *transform) Transform(ctx *resources.ResourceTransformationCtx) error {
 		URL:          filename,
 		IncludePaths: t.c.sfs.RealDirs(baseDir),
 		ImportResolver: importResolver{
-			baseDir: baseDir,
-			c:       t.c,
+			baseDir:           baseDir,
+			c:                 t.c,
+			dependencyManager: ctx.DependencyManager,
 
 			varsStylesheet: godartsass.Import{Content: sass.CreateVarsStyleSheet(opts.Vars)},
 		},
@@ -126,22 +128,23 @@ func (t *transform) Transform(ctx *resources.ResourceTransformationCtx) error {
 }
 
 type importResolver struct {
-	baseDir string
-	c       *Client
-
-	varsStylesheet godartsass.Import
+	baseDir           string
+	c                 *Client
+	dependencyManager identity.Manager
+	varsStylesheet    godartsass.Import
 }
 
 func (t importResolver) CanonicalizeURL(url string) (string, error) {
 	if url == sass.HugoVarsNamespace {
 		return url, nil
 	}
+
 	filePath, isURL := paths.UrlToFilename(url)
 	var prevDir string
 	var pathDir string
 	if isURL {
 		var found bool
-		prevDir, found = t.c.sfs.MakePathRelative(filepath.Dir(filePath))
+		prevDir, found = t.c.sfs.MakePathRelative(filepath.Dir(filePath), true)
 
 		if !found {
 			// Not a member of this filesystem, let Dart Sass handle it.
@@ -162,7 +165,12 @@ func (t importResolver) CanonicalizeURL(url string) (string, error) {
 	} else if strings.HasPrefix(name, "_") {
 		namePatterns = []string{"_%s.scss", "_%s.sass", "_%s.css"}
 	} else {
-		namePatterns = []string{"_%s.scss", "%s.scss", "_%s.sass", "%s.sass", "_%s.css", "%s.css"}
+		namePatterns = []string{
+			"_%s.scss", "%s.scss",
+			"_%s.sass", "%s.sass",
+			"_%s.css", "%s.css",
+			"%s/_index.scss", "%s/_index.sass",
+		}
 	}
 
 	name = strings.TrimPrefix(name, "_")
@@ -172,12 +180,13 @@ func (t importResolver) CanonicalizeURL(url string) (string, error) {
 		fi, err := t.c.sfs.Fs.Stat(filenameToCheck)
 		if err == nil {
 			if fim, ok := fi.(hugofs.FileMetaInfo); ok {
+				t.dependencyManager.AddIdentity(identity.CleanStringIdentity(filenameToCheck))
 				return "file://" + filepath.ToSlash(fim.Meta().Filename), nil
 			}
 		}
 	}
 
-	// Not found, let Dart Dass handle it
+	// Not found, let Dart Sass handle it
 	return "", nil
 }
 
@@ -196,7 +205,6 @@ func (t importResolver) Load(url string) (godartsass.Import, error) {
 	}
 
 	return godartsass.Import{Content: string(b), SourceSyntax: sourceSyntax}, err
-
 }
 
 type importResolverV1 struct {
