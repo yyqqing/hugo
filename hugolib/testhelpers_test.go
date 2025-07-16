@@ -260,7 +260,7 @@ disable = false
 respectDoNotTrack = true
 [privacy.instagram]
 simple = true
-[privacy.twitter]
+[privacy.x]
 enableDNT = true
 [privacy.vimeo]
 disable = false
@@ -838,7 +838,7 @@ func (s *sitesBuilder) NpmInstall() hexec.Runner {
 	var err error
 	sc.Exec.Allow, err = security.NewWhitelist("npm")
 	s.Assert(err, qt.IsNil)
-	ex := hexec.New(sc, s.workingDir)
+	ex := hexec.New(sc, s.workingDir, loggers.NewDefault())
 	command, err := ex.New("npm", "install")
 	s.Assert(err, qt.IsNil)
 	return command

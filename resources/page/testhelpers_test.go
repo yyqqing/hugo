@@ -52,7 +52,7 @@ func newTestPage() *testPage {
 
 func newTestPageWithFile(filename string) *testPage {
 	filename = filepath.FromSlash(filename)
-	file := source.NewFileInfoFrom(filename, filename)
+	file := source.NewContentFileInfoFrom(filename, filename)
 
 	l, err := langs.NewLanguage(
 		"en",
@@ -67,9 +67,10 @@ func newTestPageWithFile(filename string) *testPage {
 	}
 
 	return &testPage{
-		params: make(map[string]any),
-		data:   make(map[string]any),
-		file:   file,
+		params:   make(map[string]any),
+		data:     make(map[string]any),
+		file:     file,
+		pathInfo: file.FileInfo().Meta().PathInfo,
 		currentSection: &testPage{
 			sectionEntries: []string{"a", "b", "c"},
 		},
@@ -90,7 +91,8 @@ type testPage struct {
 
 	fuzzyWordCount int
 
-	path string
+	path     string
+	pathInfo *paths.Path
 
 	slug string
 
@@ -111,10 +113,6 @@ type testPage struct {
 	sectionEntries []string
 }
 
-func (p *testPage) Err() resource.ResourceError {
-	return nil
-}
-
 func (p *testPage) Aliases() []string {
 	panic("testpage: not implemented")
 }
@@ -125,16 +123,6 @@ func (p *testPage) AllTranslations() Pages {
 
 func (p *testPage) AlternativeOutputFormats() OutputFormats {
 	panic("testpage: not implemented")
-}
-
-// Deprecated: Use taxonomies instead.
-func (p *testPage) Author() Author {
-	return Author{}
-}
-
-// Deprecated: Use taxonomies instead.
-func (p *testPage) Authors() AuthorList {
-	return nil
 }
 
 func (p *testPage) BaseFileName() string {
@@ -201,14 +189,6 @@ func (p *testPage) ExpiryDate() time.Time {
 	return p.expiryDate
 }
 
-func (p *testPage) Ext() string {
-	panic("testpage: not implemented")
-}
-
-func (p *testPage) Extension() string {
-	panic("testpage: not implemented")
-}
-
 func (p *testPage) File() *source.File {
 	return p.file
 }
@@ -241,12 +221,12 @@ func (p *testPage) GetTerms(taxonomy string) Pages {
 	panic("testpage: not implemented")
 }
 
-func (p *testPage) GetRelatedDocsHandler() *RelatedDocsHandler {
+func (p *testPage) GetInternalRelatedDocsHandler() *RelatedDocsHandler {
 	return relatedDocsHandler
 }
 
-func (p *testPage) GitInfo() source.GitInfo {
-	return source.GitInfo{}
+func (p *testPage) GitInfo() *source.GitInfo {
+	return nil
 }
 
 func (p *testPage) CodeOwners() []string {
@@ -428,7 +408,7 @@ func (p *testPage) Path() string {
 }
 
 func (p *testPage) PathInfo() *paths.Path {
-	panic("testpage: not implemented")
+	return p.pathInfo
 }
 
 func (p *testPage) Permalink() string {
@@ -457,10 +437,6 @@ func (p *testPage) PrevPage() Page {
 
 func (p *testPage) PublishDate() time.Time {
 	return p.pubDate
-}
-
-func (p *testPage) RSSLink() template.URL {
-	return ""
 }
 
 func (p *testPage) RawContent() string {
@@ -611,7 +587,7 @@ func (p *testPage) WordCount(context.Context) int {
 func createTestPages(num int) Pages {
 	pages := make(Pages, num)
 
-	for i := 0; i < num; i++ {
+	for i := range num {
 		m := &testPage{
 			path:           fmt.Sprintf("/x/y/z/p%d.md", i),
 			weight:         5,

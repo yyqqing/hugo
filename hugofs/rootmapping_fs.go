@@ -246,11 +246,11 @@ func (fs *RootMappingFs) Mounts(base string) ([]FileMetaInfo, error) {
 		return nil, nil
 	}
 
-	fss := make([]FileMetaInfo, len(roots))
-	for i, r := range roots {
+	fss := make([]FileMetaInfo, 0, len(roots))
+	for _, r := range roots {
 		if r.fiSingleFile != nil {
 			// A single file mount.
-			fss[i] = r.fiSingleFile
+			fss = append(fss, r.fiSingleFile)
 			continue
 		}
 		bfs := NewBasePathFs(fs.Fs, r.To)
@@ -261,9 +261,9 @@ func (fs *RootMappingFs) Mounts(base string) ([]FileMetaInfo, error) {
 		fs = decorateDirs(fs, r.Meta)
 		fi, err := fs.Stat("")
 		if err != nil {
-			return nil, fmt.Errorf("RootMappingFs.Dirs: %w", err)
+			continue
 		}
-		fss[i] = fi.(FileMetaInfo)
+		fss = append(fss, fi.(FileMetaInfo))
 	}
 
 	return fss, nil
@@ -311,12 +311,13 @@ func (fs *RootMappingFs) Open(name string) (afero.File, error) {
 
 // Stat returns the os.FileInfo structure describing a given file.  If there is
 // an error, it will be of type *os.PathError.
+// If multiple roots are found, the last one will be used.
 func (fs *RootMappingFs) Stat(name string) (os.FileInfo, error) {
 	fis, err := fs.doStat(name)
 	if err != nil {
 		return nil, err
 	}
-	return fis[0], nil
+	return fis[len(fis)-1], nil
 }
 
 type ComponentPath struct {

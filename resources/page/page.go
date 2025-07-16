@@ -17,6 +17,7 @@ package page
 
 import (
 	"context"
+	"fmt"
 	"html/template"
 
 	"github.com/gohugoio/hugo/markup/converter"
@@ -50,14 +51,6 @@ type AlternativeOutputFormatsProvider interface {
 	AlternativeOutputFormats() OutputFormats
 }
 
-// AuthorProvider provides author information.
-type AuthorProvider interface {
-	// Deprecated: Use taxonomies instead.
-	Author() Author
-	// Deprecated: Use taxonomies instead.
-	Authors() AuthorList
-}
-
 // ChildCareProvider provides accessors to child resources.
 type ChildCareProvider interface {
 	// Pages returns a list of pages of all kinds.
@@ -70,8 +63,7 @@ type ChildCareProvider interface {
 	// section.
 	RegularPagesRecursive() Pages
 
-	// Resources returns a list of all resources.
-	Resources() resource.Resources
+	resource.ResourcesProvider
 }
 
 type MarkupProvider interface {
@@ -143,7 +135,7 @@ type GetPageProvider interface {
 // GitInfoProvider provides Git info.
 type GitInfoProvider interface {
 	// GitInfo returns the Git info for this object.
-	GitInfo() source.GitInfo
+	GitInfo() *source.GitInfo
 	// CodeOwners returns the code owners for this object.
 	CodeOwners() []string
 }
@@ -156,10 +148,10 @@ type InSectionPositioner interface {
 	PrevInSection() Page
 }
 
-// InternalDependencies is considered an internal interface.
-type InternalDependencies interface {
-	// GetRelatedDocsHandler is for internal use only.
-	GetRelatedDocsHandler() *RelatedDocsHandler
+// RelatedDocsHandlerProvider is considered an internal interface.
+type RelatedDocsHandlerProvider interface {
+	// GetInternalRelatedDocsHandler is for internal use only.
+	GetInternalRelatedDocsHandler() *RelatedDocsHandler
 }
 
 // OutputFormatsProvider provides the OutputFormats of a Page.
@@ -180,11 +172,17 @@ type Page interface {
 	ContentProvider
 	TableOfContentsProvider
 	PageWithoutContent
+	fmt.Stringer
 }
 
 type PageFragment interface {
 	resource.ResourceLinksProvider
 	resource.ResourceNameTitleProvider
+}
+
+type PageMetaResource interface {
+	PageMetaProvider
+	resource.Resource
 }
 
 // PageMetaProvider provides page metadata, typically provided via front matter.
@@ -258,6 +256,68 @@ type PageMetaProvider interface {
 	Weight() int
 }
 
+// NamedPageMetaValue returns a named metadata value from a PageMetaResource.
+// This is currently only used to generate keywords for related content.
+// If nameLower is not one of the metadata interface methods, we
+// look in Params.
+func NamedPageMetaValue(p PageMetaResource, nameLower string) (any, bool, error) {
+	var (
+		v   any
+		err error
+	)
+
+	switch nameLower {
+	case "kind":
+		v = p.Kind()
+	case "bundletype":
+		v = p.BundleType()
+	case "mediatype":
+		v = p.MediaType()
+	case "section":
+		v = p.Section()
+	case "lang":
+		v = p.Lang()
+	case "aliases":
+		v = p.Aliases()
+	case "name":
+		v = p.Name()
+	case "keywords":
+		v = p.Keywords()
+	case "description":
+		v = p.Description()
+	case "title":
+		v = p.Title()
+	case "linktitle":
+		v = p.LinkTitle()
+	case "slug":
+		v = p.Slug()
+	case "date":
+		v = p.Date()
+	case "publishdate":
+		v = p.PublishDate()
+	case "expirydate":
+		v = p.ExpiryDate()
+	case "lastmod":
+		v = p.Lastmod()
+	case "draft":
+		v = p.Draft()
+	case "type":
+		v = p.Type()
+	case "layout":
+		v = p.Layout()
+	case "weight":
+		v = p.Weight()
+	default:
+		// Try params.
+		v, err = resource.Param(p, nil, nameLower)
+		if v == nil {
+			return nil, false, nil
+		}
+	}
+
+	return v, err == nil, err
+}
+
 // PageMetaInternalProvider provides internal page metadata.
 type PageMetaInternalProvider interface {
 	// This is for internal use only.
@@ -307,9 +367,6 @@ type PageWithoutContent interface {
 	Positioner
 	navigation.PageMenusProvider
 
-	// TODO(bep)
-	AuthorProvider
-
 	// Page lookups/refs
 	GetPageProvider
 	RefProvider
@@ -325,11 +382,11 @@ type PageWithoutContent interface {
 
 	// Scratch returns a Scratch that can be used to store temporary state.
 	// Note that this Scratch gets reset on server rebuilds. See Store() for a variant that survives.
-	maps.Scratcher
+	// Scratch returns a "scratch pad" that can be used to store state.
+	// Deprecated: From Hugo v0.138.0 this is just an alias for Store.
+	Scratch() *maps.Scratch
 
-	// Store returns a Scratch that can be used to store temporary state.
-	// In contrast to Scratch(), this Scratch is not reset on server rebuilds.
-	Store() *maps.Scratch
+	maps.StoreProvider
 
 	RelatedKeywordsProvider
 

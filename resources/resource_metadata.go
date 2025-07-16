@@ -15,6 +15,7 @@ package resources
 
 import (
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -26,6 +27,8 @@ import (
 	"github.com/spf13/cast"
 
 	"github.com/gohugoio/hugo/common/maps"
+	"github.com/gohugoio/hugo/common/paths"
+	maps0 "maps"
 )
 
 var (
@@ -83,11 +86,9 @@ func (r *metaResource) setName(name string) {
 
 func (r *metaResource) updateParams(params map[string]any) {
 	if r.params == nil {
-		r.params = make(map[string]interface{})
+		r.params = make(map[string]any)
 	}
-	for k, v := range params {
-		r.params[k] = v
-	}
+	maps0.Copy(r.params, params)
 	r.changed = true
 }
 
@@ -172,6 +173,8 @@ func assignMetadata(metadata []map[string]any, ma *metaResource) error {
 				name, found := meta["name"]
 				if found {
 					name := cast.ToString(name)
+					// Bundled resources in sub folders are relative paths with forward slashes. Make sure any renames also matches that format:
+					name = paths.TrimLeading(filepath.ToSlash(name))
 					if !nameCounterFound {
 						nameCounterFound = strings.Contains(name, counterPlaceHolder)
 					}

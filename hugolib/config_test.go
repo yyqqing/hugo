@@ -475,7 +475,7 @@ name = "menu-theme"
 		})
 	})
 
-	// Issue #8724
+	// Issue #8724 ##13643
 	for _, mergeStrategy := range []string{"none", "shallow"} {
 		c.Run(fmt.Sprintf("Merge with sitemap config in theme, mergestrategy %s", mergeStrategy), func(c *qt.C) {
 			smapConfigTempl := `[sitemap]
@@ -495,7 +495,7 @@ name = "menu-theme"
 				b.Assert(got.Sitemap, qt.DeepEquals, config.SitemapConfig{ChangeFreq: "", Disable: false, Priority: -1, Filename: "sitemap.xml"})
 				b.AssertFileContent("public/sitemap.xml", "schemas/sitemap")
 			} else {
-				b.Assert(got.Sitemap, qt.DeepEquals, config.SitemapConfig{ChangeFreq: "monthly", Disable: false, Priority: -1, Filename: "sitemap.xml"})
+				b.Assert(got.Sitemap, qt.DeepEquals, config.SitemapConfig{ChangeFreq: "monthly", Disable: false, Priority: 0.5, Filename: "sitemap.xml"})
 				b.AssertFileContent("public/sitemap.xml", "<changefreq>monthly</changefreq>")
 			}
 		})
@@ -793,7 +793,7 @@ Single.
 		files := strings.ReplaceAll(filesTemplate, "WEIGHT_EN", "2")
 		files = strings.ReplaceAll(files, "WEIGHT_SV", "1")
 
-		for i := 0; i < 20; i++ {
+		for range 20 {
 			cfg := config.New()
 			b, err := NewIntegrationTestBuilder(
 				IntegrationTestConfig{
@@ -1339,6 +1339,29 @@ Home.
 	b.Assert(len(b.H.Sites), qt.Equals, 1)
 }
 
+func TestDisableDefaultLanguageRedirect(t *testing.T) {
+	t.Parallel()
+
+	files := `
+-- hugo.toml --
+defaultContentLanguageInSubdir = true
+disableDefaultLanguageRedirect = true
+[languages]
+[languages.en]
+title = "English Title"
+[languages.sv]
+title = "Swedish Title"
+-- layouts/index.html --
+Home.
+
+
+`
+	b := Test(t, files)
+
+	b.Assert(len(b.H.Sites), qt.Equals, 2)
+	b.AssertFileExists("public/index.html", false)
+}
+
 func TestLoadConfigYamlEnvVar(t *testing.T) {
 	defaultEnv := []string{`HUGO_OUTPUTS=home: ['json']`}
 
@@ -1383,7 +1406,7 @@ home = ["html"]
 			"home":     {"html"},
 			"page":     {"html"},
 			"rss":      {"rss"},
-			"section":  nil,
+			"section":  {},
 			"taxonomy": {"html", "rss"},
 			"term":     {"html", "rss"},
 		})

@@ -6,17 +6,17 @@ name: Test
 env:
   GOPROXY: https://proxy.golang.org
   GO111MODULE: on
-  SASS_VERSION: 1.63.2
-  DART_SASS_SHA_LINUX: 3ea33c95ad5c35fda6e9a0956199eef38a398f496cfb8750e02479d7d1dd42af
-  DART_SASS_SHA_MACOS: 11c70f259836b250b44a9cb57fed70e030f21f45069b467d371685855f1eb4f0
-  DART_SASS_SHA_WINDOWS: cd8cd36a619dd8e27f93d3186c52d70eb7d69472aa6c85f5094b29693e773f64
+  SASS_VERSION: 1.80.3
+  DART_SASS_SHA_LINUX: 7c933edbad0a7d389192c5b79393485c088bd2c4398e32f5754c32af006a9ffd
+  DART_SASS_SHA_MACOS: 79e060b0e131c3bb3c16926bafc371dc33feab122bfa8c01aa337a072097967b
+  DART_SASS_SHA_WINDOWS: 0bc4708b37cd1bac4740e83ac5e3176e66b774f77fd5dd364da5b5cfc9bfb469
 permissions:
   contents: read
 jobs:
   test:
     strategy:
       matrix:
-        go-version: [1.22.x, 1.23.x]
+        go-version: [1.23.x, 1.24.x]
         os: [ubuntu-latest, windows-latest] # macos disabled for now because of disk space issues.
     runs-on: ${{ matrix.os }}
     steps:
@@ -112,17 +112,17 @@ jobs:
           sass --version;
           mage -v check;
         env:
-          HUGO_BUILD_TAGS: extended
+          HUGO_BUILD_TAGS: extended,withdeploy
       - if: matrix.os == 'windows-latest'
         # See issue #11052. We limit the build to regular test (no -race flag) on Windows for now.
         name: Test
         run: |
           mage -v test;
         env:
-          HUGO_BUILD_TAGS: extended
+          HUGO_BUILD_TAGS: extended,withdeploy
       - name: Build tags
         run: |
-          go install -tags extended,nodeploy
+          go install -tags extended
       - if: matrix.os == 'ubuntu-latest'
         name: Build for dragonfly
         run: |

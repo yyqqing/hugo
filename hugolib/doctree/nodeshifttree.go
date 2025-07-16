@@ -59,7 +59,7 @@ type (
 )
 
 // NodeShiftTree is the root of a tree that can be shaped using the Shape method.
-// Note that multipled shapes of the same tree is meant to be used concurrently,
+// Note that multiplied shapes of the same tree is meant to be used concurrently,
 // so use the applicable locking when needed.
 type NodeShiftTree[T any] struct {
 	tree *radix.Tree
@@ -363,7 +363,7 @@ func (r *NodeShiftTreeWalker[T]) Walk(ctx context.Context) error {
 	main := r.Tree
 
 	var err error
-	fnMain := func(s string, v interface{}) bool {
+	fnMain := func(s string, v any) bool {
 		if r.ShouldSkip(s) {
 			return false
 		}

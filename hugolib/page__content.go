@@ -24,6 +24,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	maps0 "maps"
+
 	"github.com/bep/logg"
 	"github.com/gohugoio/hugo/common/hcontext"
 	"github.com/gohugoio/hugo/common/herrors"
@@ -32,7 +34,6 @@ import (
 	"github.com/gohugoio/hugo/common/maps"
 	"github.com/gohugoio/hugo/common/types/hstring"
 	"github.com/gohugoio/hugo/helpers"
-	"github.com/gohugoio/hugo/identity"
 	"github.com/gohugoio/hugo/markup"
 	"github.com/gohugoio/hugo/markup/converter"
 	"github.com/gohugoio/hugo/markup/goldmark/hugocontext"
@@ -599,7 +600,7 @@ func (c *cachedContentScope) contentRendered(ctx context.Context) (contentSummar
 				return nil, err
 			}
 			if hasShortcodeVariants {
-				cp.po.p.pageOutputTemplateVariationsState.Add(1)
+				cp.po.p.incrPageOutputTemplateVariation()
 			}
 
 			var result contentSummary
@@ -666,7 +667,13 @@ func (c *cachedContentScope) mustContentToC(ctx context.Context) contentTableOfC
 	return ct
 }
 
-var setGetContentCallbackInContext = hcontext.NewContextDispatcher[func(*pageContentOutput, contentTableOfContents)]("contentCallback")
+type contextKey uint8
+
+const (
+	contextKeyContentCallback contextKey = iota
+)
+
+var setGetContentCallbackInContext = hcontext.NewContextDispatcher[func(*pageContentOutput, contentTableOfContents)](contextKeyContentCallback)
 
 func (c *cachedContentScope) contentToC(ctx context.Context) (contentTableOfContents, error) {
 	cp := c.pco
@@ -683,10 +690,9 @@ func (c *cachedContentScope) contentToC(ctx context.Context) (contentTableOfCont
 		if err := cp.initRenderHooks(); err != nil {
 			return nil, err
 		}
-		f := cp.po.f
 		po := cp.po
 		p := po.p
-		ct.contentPlaceholders, err = c.shortcodeState.prepareShortcodesForPage(ctx, p, f, false)
+		ct.contentPlaceholders, err = c.shortcodeState.prepareShortcodesForPage(ctx, po, false)
 		if err != nil {
 			return nil, err
 		}
@@ -696,22 +702,18 @@ func (c *cachedContentScope) contentToC(ctx context.Context) (contentTableOfCont
 			cp.otherOutputs.Set(cp2.po.p.pid, cp2)
 
 			// Merge content placeholders
-			for k, v := range ct2.contentPlaceholders {
-				ct.contentPlaceholders[k] = v
-			}
+			maps0.Copy(ct.contentPlaceholders, ct2.contentPlaceholders)
 
 			if p.s.conf.Internal.Watch {
 				for _, s := range cp2.po.p.m.content.shortcodeState.shortcodes {
-					for _, templ := range s.templs {
-						cp.trackDependency(templ.(identity.IdentityProvider))
-					}
+					cp.trackDependency(s.templ)
 				}
 			}
 
 			// Transfer shortcode names so HasShortcode works for shortcodes from included pages.
 			cp.po.p.m.content.shortcodeState.transferNames(cp2.po.p.m.content.shortcodeState)
 			if cp2.po.p.pageOutputTemplateVariationsState.Load() > 0 {
-				cp.po.p.pageOutputTemplateVariationsState.Add(1)
+				cp.po.p.incrPageOutputTemplateVariation()
 			}
 		}
 
@@ -724,22 +726,21 @@ func (c *cachedContentScope) contentToC(ctx context.Context) (contentTableOfCont
 		}
 
 		if hasVariants {
-			p.pageOutputTemplateVariationsState.Add(1)
+			p.incrPageOutputTemplateVariation()
 		}
 
 		isHTML := cp.po.p.m.pageConfig.ContentMediaType.IsHTML()
 
 		if !isHTML {
-			createAndSetToC := func(tocProvider converter.TableOfContentsProvider) {
+			createAndSetToC := func(tocProvider converter.TableOfContentsProvider) error {
 				cfg := p.s.ContentSpec.Converters.GetMarkupConfig()
 				ct.tableOfContents = tocProvider.TableOfContents()
-				ct.tableOfContentsHTML = template.HTML(
-					ct.tableOfContents.ToHTML(
-						cfg.TableOfContents.StartLevel,
-						cfg.TableOfContents.EndLevel,
-						cfg.TableOfContents.Ordered,
-					),
+				ct.tableOfContentsHTML, err = ct.tableOfContents.ToHTML(
+					cfg.TableOfContents.StartLevel,
+					cfg.TableOfContents.EndLevel,
+					cfg.TableOfContents.Ordered,
 				)
+				return err
 			}
 
 			// If the converter supports doing the parsing separately, we do that.
@@ -849,7 +850,7 @@ func (c *cachedContentScope) contentPlain(ctx context.Context) (contentPlainPlai
 	})
 	if err != nil {
 		if herrors.IsTimeoutError(err) {
-			err = fmt.Errorf("timed out rendering the page content. You may have a circular loop in a shortcode, or your site may have resources that take longer to build than the `timeout` limit in your Hugo config file: %w", err)
+			err = fmt.Errorf("timed out rendering the page content. Extend the `timeout` limit in your Hugo config file: %w", err)
 		}
 		return contentPlainPlainWords{}, err
 	}
@@ -863,6 +864,10 @@ type cachedContentScope struct {
 }
 
 func (c *cachedContentScope) prepareContext(ctx context.Context) context.Context {
+	// A regular page's shortcode etc. may be rendered by e.g. the home page,
+	// so we need to track any changes to this content's page.
+	ctx = tpl.Context.DependencyManagerScopedProvider.Set(ctx, c.pco.po.p)
+
 	// The markup scope is recursive, so if already set to a non zero value, preserve that value.
 	if s := hugo.GetMarkupScope(ctx); s != "" || s == c.scope {
 		return ctx
@@ -978,7 +983,7 @@ func (c *cachedContentScope) RenderString(ctx context.Context, args ...any) (tem
 			return "", err
 		}
 
-		placeholders, err := s.prepareShortcodesForPage(ctx, pco.po.p, pco.po.f, true)
+		placeholders, err := s.prepareShortcodesForPage(ctx, pco.po, true)
 		if err != nil {
 			return "", err
 		}
@@ -988,7 +993,7 @@ func (c *cachedContentScope) RenderString(ctx context.Context, args ...any) (tem
 			return "", err
 		}
 		if hasVariants {
-			pco.po.p.pageOutputTemplateVariationsState.Add(1)
+			pco.po.p.incrPageOutputTemplateVariation()
 		}
 		b, err := pco.renderContentWithConverter(ctx, conv, contentToRender, false)
 		if err != nil {
@@ -1026,7 +1031,7 @@ func (c *cachedContentScope) RenderString(ctx context.Context, args ...any) (tem
 				return "", err
 			}
 			if hasShortcodeVariants {
-				pco.po.p.pageOutputTemplateVariationsState.Add(1)
+				pco.po.p.incrPageOutputTemplateVariation()
 			}
 		}
 
@@ -1108,7 +1113,7 @@ func (c *cachedContentScope) RenderShortcodes(ctx context.Context) (template.HTM
 	}
 
 	if hasVariants {
-		pco.po.p.pageOutputTemplateVariationsState.Add(1)
+		pco.po.p.incrPageOutputTemplateVariation()
 	}
 
 	if cb != nil {

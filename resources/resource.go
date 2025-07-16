@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 
 	"github.com/gohugoio/hugo/identity"
+	"github.com/gohugoio/hugo/lazy"
 	"github.com/gohugoio/hugo/resources/internal"
 
 	"github.com/gohugoio/hugo/common/hashing"
@@ -47,10 +48,14 @@ var (
 	_ resource.Cloner                    = (*genericResource)(nil)
 	_ resource.ResourcesLanguageMerger   = (*resource.Resources)(nil)
 	_ resource.Identifier                = (*genericResource)(nil)
+	_ resource.TransientIdentifier       = (*genericResource)(nil)
+	_ targetPathProvider                 = (*genericResource)(nil)
+	_ sourcePathProvider                 = (*genericResource)(nil)
 	_ identity.IdentityGroupProvider     = (*genericResource)(nil)
 	_ identity.DependencyManagerProvider = (*genericResource)(nil)
 	_ identity.Identity                  = (*genericResource)(nil)
 	_ fileInfo                           = (*genericResource)(nil)
+	_ isPublishedProvider                = (*genericResource)(nil)
 )
 
 type ResourceSourceDescriptor struct {
@@ -79,6 +84,7 @@ type ResourceSourceDescriptor struct {
 	TargetPath           string
 	BasePathRelPermalink string
 	BasePathTargetPath   string
+	SourceFilenameOrPath string // Used for error logging.
 
 	// The Data to associate with this resource.
 	Data map[string]any
@@ -138,13 +144,6 @@ func (fd *ResourceSourceDescriptor) init(r *Spec) error {
 	}
 
 	fd.TargetPath = paths.ToSlashPreserveLeading(fd.TargetPath)
-	for i, base := range fd.TargetBasePaths {
-		dir := paths.ToSlashPreserveLeading(base)
-		if dir == "/" {
-			dir = ""
-		}
-		fd.TargetBasePaths[i] = dir
-	}
 
 	if fd.NameNormalized == "" {
 		fd.NameNormalized = fd.TargetPath
@@ -227,9 +226,6 @@ type resourceCopier interface {
 
 // Copy copies r to the targetPath given.
 func Copy(r resource.Resource, targetPath string) resource.Resource {
-	if r.Err() != nil {
-		panic(fmt.Sprintf("Resource has an .Err: %s", r.Err()))
-	}
 	return r.(resourceCopier).cloneTo(targetPath)
 }
 
@@ -248,6 +244,7 @@ type baseResourceInternal interface {
 	fileInfo
 	mediaTypeAssigner
 	targetPather
+	isPublishedProvider
 
 	ReadSeekCloser() (hugio.ReadSeekCloser, error)
 
@@ -361,11 +358,15 @@ func GetTestInfoForResource(r resource.Resource) GenericResourceTestInfo {
 
 // genericResource represents a generic linkable resource.
 type genericResource struct {
-	publishInit *sync.Once
+	publishInit *lazy.OnceMore
+
+	key     string
+	keyInit *sync.Once
 
 	sd    ResourceSourceDescriptor
 	paths internal.ResourcePaths
 
+	includeHashInKey     bool
 	sourceFilenameIsHash bool
 
 	h *resourceHash // A hash of the source content. Is only calculated in caching situations.
@@ -439,28 +440,44 @@ func (l *genericResource) Content(context.Context) (any, error) {
 	return hugio.ReadString(r)
 }
 
-func (r *genericResource) Err() resource.ResourceError {
-	return nil
-}
-
 func (l *genericResource) Data() any {
 	return l.sd.Data
 }
 
 func (l *genericResource) Key() string {
-	basePath := l.spec.Cfg.BaseURL().BasePathNoTrailingSlash
-	var key string
-	if basePath == "" {
-		key = l.RelPermalink()
-	} else {
-		key = strings.TrimPrefix(l.RelPermalink(), basePath)
-	}
+	l.keyInit.Do(func() {
+		basePath := l.spec.Cfg.BaseURL().BasePathNoTrailingSlash
+		if basePath == "" {
+			l.key = l.RelPermalink()
+		} else {
+			l.key = strings.TrimPrefix(l.RelPermalink(), basePath)
+		}
 
-	if l.spec.Cfg.IsMultihost() {
-		key = l.spec.Lang() + key
-	}
+		if l.spec.Cfg.IsMultihost() {
+			l.key = l.spec.Lang() + l.key
+		}
 
-	return key
+		if l.includeHashInKey && !l.sourceFilenameIsHash {
+			l.key += fmt.Sprintf("_%d", l.hash())
+		}
+	})
+
+	return l.key
+}
+
+func (l *genericResource) TransientKey() string {
+	return l.Key()
+}
+
+func (l *genericResource) targetPath() string {
+	return l.paths.TargetPath()
+}
+
+func (l *genericResource) sourcePath() string {
+	if p := l.sd.SourceFilenameOrPath; p != "" {
+		return p
+	}
+	return ""
 }
 
 func (l *genericResource) MediaType() media.Type {
@@ -520,6 +537,10 @@ func (l *genericResource) Publish() error {
 	})
 
 	return err
+}
+
+func (l *genericResource) isPublished() bool {
+	return l.publishInit.Done()
 }
 
 func (l *genericResource) RelPermalink() string {
@@ -615,7 +636,8 @@ func (rc *genericResource) cloneWithUpdates(u *transformationUpdate) (baseResour
 }
 
 func (l genericResource) clone() *genericResource {
-	l.publishInit = &sync.Once{}
+	l.publishInit = &lazy.OnceMore{}
+	l.keyInit = &sync.Once{}
 	return &l
 }
 
@@ -626,6 +648,10 @@ func (r *genericResource) openPublishFileForWriting(relTargetPath string) (io.Wr
 
 type targetPather interface {
 	TargetPath() string
+}
+
+type isPublishedProvider interface {
+	isPublished() bool
 }
 
 type resourceHash struct {
@@ -659,4 +685,49 @@ func (r *resourceHash) init(l hugio.ReadSeekCloserProvider) error {
 
 func hashImage(r io.ReadSeeker) (uint64, int64, error) {
 	return hashing.XXHashFromReader(r)
+}
+
+// InternalResourceTargetPath is used internally to get the target path for a Resource.
+func InternalResourceTargetPath(r resource.Resource) string {
+	return r.(targetPathProvider).targetPath()
+}
+
+// InternalResourceSourcePathBestEffort is used internally to get the source path for a Resource.
+// It returns an empty string if the source path is not available.
+func InternalResourceSourcePath(r resource.Resource) string {
+	if sp, ok := r.(sourcePathProvider); ok {
+		if p := sp.sourcePath(); p != "" {
+			return p
+		}
+	}
+	return ""
+}
+
+// InternalResourceSourcePathBestEffort is used internally to get the source path for a Resource.
+// Used for error messages etc.
+// It will fall back to the target path if the source path is not available.
+func InternalResourceSourcePathBestEffort(r resource.Resource) string {
+	if s := InternalResourceSourcePath(r); s != "" {
+		return s
+	}
+	return InternalResourceTargetPath(r)
+}
+
+// isPublished returns true if the resource is published.
+func IsPublished(r resource.Resource) bool {
+	return r.(isPublishedProvider).isPublished()
+}
+
+type targetPathProvider interface {
+	// targetPath is the relative path to this resource.
+	// In most cases this will be the same as the RelPermalink(),
+	// but it will not trigger any lazy publishing.
+	targetPath() string
+}
+
+// Optional interface implemented by resources that can provide the source path.
+type sourcePathProvider interface {
+	// sourcePath is the source path to this resource's source.
+	// This is used in error messages etc.
+	sourcePath() string
 }

@@ -137,15 +137,15 @@ func (c ConfigLanguage) Watching() bool {
 	return c.m.Base.Internal.Watch
 }
 
-func (c ConfigLanguage) NewIdentityManager(name string) identity.Manager {
+func (c ConfigLanguage) NewIdentityManager(name string, opts ...identity.ManagerOption) identity.Manager {
 	if !c.Watching() {
 		return identity.NopManager
 	}
-	return identity.NewManager(name)
+	return identity.NewManager(name, opts...)
 }
 
 func (c ConfigLanguage) ContentTypes() config.ContentTypesProvider {
-	return c.config.C.ContentTypes
+	return c.config.ContentTypes.Config
 }
 
 // GetConfigSection is mostly used in tests. The switch statement isn't complete, but what's in use.

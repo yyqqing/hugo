@@ -15,12 +15,13 @@ package hugolib
 
 import (
 	"fmt"
-	"sync"
+	"strings"
 	"sync/atomic"
 
 	"github.com/gohugoio/hugo/hugofs/files"
 	"github.com/gohugoio/hugo/resources"
 
+	"github.com/gohugoio/hugo/common/constants"
 	"github.com/gohugoio/hugo/common/maps"
 	"github.com/gohugoio/hugo/common/paths"
 
@@ -34,6 +35,23 @@ import (
 var pageIDCounter atomic.Uint64
 
 func (h *HugoSites) newPage(m *pageMeta) (*pageState, *paths.Path, error) {
+	p, pth, err := h.doNewPage(m)
+	if err != nil {
+		// Make sure that any partially created page part is marked as stale.
+		m.MarkStale()
+	}
+
+	if p != nil && pth != nil && p.IsHome() && pth.IsLeafBundle() {
+		msg := "Using %s in your content's root directory is usually incorrect for your home page. "
+		msg += "You should use %s instead. If you don't rename this file, your home page will be "
+		msg += "treated as a leaf bundle, meaning it won't be able to have any child pages or sections."
+		h.Log.Warnidf(constants.WarnHomePageIsLeafBundle, msg, pth.PathNoLeadingSlash(), strings.ReplaceAll(pth.PathNoLeadingSlash(), "index", "_index"))
+	}
+
+	return p, pth, err
+}
+
+func (h *HugoSites) doNewPage(m *pageMeta) (*pageState, *paths.Path, error) {
 	m.Staler = &resources.AtomicStaler{}
 	if m.pageMetaParams == nil {
 		m.pageMetaParams = &pageMetaParams{
@@ -131,6 +149,7 @@ func (h *HugoSites) newPage(m *pageMeta) (*pageState, *paths.Path, error) {
 			}
 		}
 
+		var tc viewName
 		// Identify Page Kind.
 		if m.pageConfig.Kind == "" {
 			m.pageConfig.Kind = kinds.KindSection
@@ -138,20 +157,30 @@ func (h *HugoSites) newPage(m *pageMeta) (*pageState, *paths.Path, error) {
 				m.pageConfig.Kind = kinds.KindHome
 			} else if m.pathInfo.IsBranchBundle() {
 				// A section, taxonomy or term.
-				tc := m.s.pageMap.cfg.getTaxonomyConfig(m.Path())
+				tc = m.s.pageMap.cfg.getTaxonomyConfig(m.Path())
 				if !tc.IsZero() {
 					// Either a taxonomy or a term.
 					if tc.pluralTreeKey == m.Path() {
 						m.pageConfig.Kind = kinds.KindTaxonomy
-						m.singular = tc.singular
 					} else {
 						m.pageConfig.Kind = kinds.KindTerm
-						m.term = m.pathInfo.Unnormalized().BaseNameNoIdentifier()
-						m.singular = tc.singular
 					}
 				}
 			} else if m.f != nil {
 				m.pageConfig.Kind = kinds.KindPage
+			}
+		}
+
+		if m.pageConfig.Kind == kinds.KindTerm || m.pageConfig.Kind == kinds.KindTaxonomy {
+			if tc.IsZero() {
+				tc = m.s.pageMap.cfg.getTaxonomyConfig(m.Path())
+			}
+			if tc.IsZero() {
+				return nil, fmt.Errorf("no taxonomy configuration found for %q", m.Path())
+			}
+			m.singular = tc.singular
+			if m.pageConfig.Kind == kinds.KindTerm {
+				m.term = paths.TrimLeading(strings.TrimPrefix(m.pathInfo.Unnormalized().Base(), tc.pluralTreeKey))
 			}
 		}
 
@@ -169,13 +198,10 @@ func (h *HugoSites) newPage(m *pageMeta) (*pageState, *paths.Path, error) {
 			pid:                               pid,
 			pageOutput:                        nopPageOutput,
 			pageOutputTemplateVariationsState: &atomic.Uint32{},
-			resourcesPublishInit:              &sync.Once{},
 			Staler:                            m,
 			dependencyManager:                 m.s.Conf.NewIdentityManager(m.Path()),
 			pageCommon: &pageCommon{
 				FileProvider:              m,
-				AuthorProvider:            m,
-				Scratcher:                 maps.NewScratcher(),
 				store:                     maps.NewScratch(),
 				Positioner:                page.NopPage,
 				InSectionPositioner:       page.NopPage,
@@ -183,7 +209,6 @@ func (h *HugoSites) newPage(m *pageMeta) (*pageState, *paths.Path, error) {
 				ResourceParamsProvider:    m,
 				PageMetaProvider:          m,
 				PageMetaInternalProvider:  m,
-				RelatedKeywordsProvider:   m,
 				OutputFormatsProvider:     page.NopPage,
 				ResourceTypeProvider:      pageTypesProvider,
 				MediaTypeProvider:         pageTypesProvider,
@@ -191,11 +216,11 @@ func (h *HugoSites) newPage(m *pageMeta) (*pageState, *paths.Path, error) {
 				ShortcodeInfoProvider:     page.NopPage,
 				LanguageProvider:          m.s,
 
-				InternalDependencies: m.s,
-				init:                 lazy.New(),
-				m:                    m,
-				s:                    m.s,
-				sWrapped:             page.WrapSite(m.s),
+				RelatedDocsHandlerProvider: m.s,
+				init:                       lazy.New(),
+				m:                          m,
+				s:                          m.s,
+				sWrapped:                   page.WrapSite(m.s),
 			},
 		}
 
@@ -231,10 +256,6 @@ func (h *HugoSites) newPage(m *pageMeta) (*pageState, *paths.Path, error) {
 		}
 		return ps, nil
 	}()
-	// Make sure to evict any cached and now stale data.
-	if err != nil {
-		m.MarkStale()
-	}
 
 	if ps == nil {
 		return nil, nil, err

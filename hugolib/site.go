@@ -17,7 +17,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"html/template"
 	"io"
 	"mime"
 	"net/url"
@@ -43,11 +42,18 @@ import (
 	"github.com/gohugoio/hugo/deps"
 	"github.com/gohugoio/hugo/hugolib/doctree"
 	"github.com/gohugoio/hugo/hugolib/pagesfromdata"
+	"github.com/gohugoio/hugo/internal/js/esbuild"
 	"github.com/gohugoio/hugo/internal/warpc"
 	"github.com/gohugoio/hugo/langs/i18n"
 	"github.com/gohugoio/hugo/modules"
 	"github.com/gohugoio/hugo/resources"
+
 	"github.com/gohugoio/hugo/tpl/tplimpl"
+	"github.com/gohugoio/hugo/tpl/tplimplinit"
+	xmaps "golang.org/x/exp/maps"
+
+	// Loads the template funcs namespaces.
+
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/gohugoio/hugo/common/paths"
@@ -95,6 +101,7 @@ type Site struct {
 	language  *langs.Language
 	languagei int
 	pageMap   *pageMap
+	store     *maps.Scratch
 
 	// The owning container.
 	h *HugoSites
@@ -145,8 +152,11 @@ func NewHugoSites(cfg deps.DepsCfg) (*HugoSites, error) {
 		if cfg.Configs.Base.PanicOnWarning {
 			logHookLast = loggers.PanicOnWarningHook
 		}
-		if cfg.LogOut == nil {
-			cfg.LogOut = os.Stdout
+		if cfg.StdOut == nil {
+			cfg.StdOut = os.Stdout
+		}
+		if cfg.StdErr == nil {
+			cfg.StdErr = os.Stderr
 		}
 		if cfg.LogLevel == 0 {
 			cfg.LogLevel = logg.LevelWarn
@@ -156,8 +166,8 @@ func NewHugoSites(cfg deps.DepsCfg) (*HugoSites, error) {
 			Level:              cfg.LogLevel,
 			DistinctLevel:      logg.LevelWarn, // This will drop duplicate log warning and errors.
 			HandlerPost:        logHookLast,
-			Stdout:             cfg.LogOut,
-			Stderr:             cfg.LogOut,
+			StdOut:             cfg.StdOut,
+			StdErr:             cfg.StdErr,
 			StoreErrors:        conf.Watching(),
 			SuppressStatements: conf.IgnoredLogs(),
 		}
@@ -184,8 +194,8 @@ func NewHugoSites(cfg deps.DepsCfg) (*HugoSites, error) {
 		BuildState: &deps.BuildState{
 			OnSignalRebuild: onSignalRebuild,
 		},
+		Counters:            &deps.Counters{},
 		MemCache:            memCache,
-		TemplateProvider:    tplimpl.DefaultTemplateProvider,
 		TranslationProvider: i18n.NewTranslationProvider(),
 		WasmDispatchers: warpc.AllDispatchers(
 			warpc.Options{
@@ -194,6 +204,7 @@ func NewHugoSites(cfg deps.DepsCfg) (*HugoSites, error) {
 				// Katex is relatively slow.
 				PoolSize: 8,
 				Infof:    logger.InfoCommand("wasm").Logf,
+				Warnf:    logger.WarnCommand("wasm").Logf,
 			},
 		),
 	}
@@ -201,6 +212,12 @@ func NewHugoSites(cfg deps.DepsCfg) (*HugoSites, error) {
 	if err := firstSiteDeps.Init(); err != nil {
 		return nil, err
 	}
+
+	batcherClient, err := esbuild.NewBatcherClient(firstSiteDeps)
+	if err != nil {
+		return nil, err
+	}
+	firstSiteDeps.JSBatcherClient = batcherClient
 
 	confm := cfg.Configs
 	if err := confm.Validate(logger); err != nil {
@@ -248,6 +265,7 @@ func NewHugoSites(cfg deps.DepsCfg) (*HugoSites, error) {
 			language:           language,
 			languagei:          i,
 			frontmatterHandler: frontmatterHandler,
+			store:              maps.NewScratch(),
 		}
 
 		if i == 0 {
@@ -309,7 +327,6 @@ func NewHugoSites(cfg deps.DepsCfg) (*HugoSites, error) {
 		return li.Lang < lj.Lang
 	})
 
-	var err error
 	h, err = newHugoSites(cfg, firstSiteDeps, pageTrees, sites)
 	if err == nil && h == nil {
 		panic("hugo: newHugoSitesNew returned nil error and nil HugoSites")
@@ -320,10 +337,7 @@ func NewHugoSites(cfg deps.DepsCfg) (*HugoSites, error) {
 
 func newHugoSites(cfg deps.DepsCfg, d *deps.Deps, pageTrees *pageTrees, sites []*Site) (*HugoSites, error) {
 	numWorkers := config.GetNumWorkerMultiplier()
-	numWorkersSite := numWorkers
-	if numWorkersSite > len(sites) {
-		numWorkersSite = len(sites)
-	}
+	numWorkersSite := min(numWorkers, len(sites))
 	workersSite := para.New(numWorkersSite)
 
 	h := &HugoSites{
@@ -344,7 +358,6 @@ func newHugoSites(cfg deps.DepsCfg, d *deps.Deps, pageTrees *pageTrees, sites []
 		skipRebuildForFilenames: make(map[string]bool),
 		init: &hugoSitesInit{
 			data:    lazy.New(),
-			layouts: lazy.New(),
 			gitInfo: lazy.New(),
 		},
 	}
@@ -379,6 +392,36 @@ func newHugoSites(cfg deps.DepsCfg, d *deps.Deps, pageTrees *pageTrees, sites []
 	var prototype *deps.Deps
 	for i, s := range sites {
 		s.h = h
+		// The template store needs to be initialized after the h container is set on s.
+		if i == 0 {
+			templateStore, err := tplimpl.NewStore(
+				tplimpl.StoreOptions{
+					Fs:                     s.BaseFs.Layouts.Fs,
+					Log:                    s.Log,
+					DefaultContentLanguage: s.Conf.DefaultContentLanguage(),
+					Watching:               s.Conf.Watching(),
+					PathParser:             s.Conf.PathParser(),
+					Metrics:                d.Metrics,
+					OutputFormats:          s.conf.OutputFormats.Config,
+					MediaTypes:             s.conf.MediaTypes.Config,
+					DefaultOutputFormat:    s.conf.DefaultOutputFormat,
+					TaxonomySingularPlural: s.conf.Taxonomies,
+					RenderHooks:            s.conf.Markup.Goldmark.RenderHooks,
+				}, tplimpl.SiteOptions{
+					Site:          s,
+					TemplateFuncs: tplimplinit.CreateFuncMap(s.Deps),
+				})
+			if err != nil {
+				return nil, err
+			}
+			s.Deps.TemplateStore = templateStore
+		} else {
+			s.Deps.TemplateStore = prototype.TemplateStore.WithSiteOpts(
+				tplimpl.SiteOptions{
+					Site:          s,
+					TemplateFuncs: tplimplinit.CreateFuncMap(s.Deps),
+				})
+		}
 		if err := s.Deps.Compile(prototype); err != nil {
 			return nil, err
 		}
@@ -400,15 +443,6 @@ func newHugoSites(cfg deps.DepsCfg, d *deps.Deps, pageTrees *pageTrees, sites []
 		return nil, nil
 	})
 
-	h.init.layouts.Add(func(context.Context) (any, error) {
-		for _, s := range h.Sites {
-			if err := s.Tmpl().(tpl.TemplateManager).MarkReady(); err != nil {
-				return nil, err
-			}
-		}
-		return nil, nil
-	})
-
 	h.init.gitInfo.Add(func(context.Context) (any, error) {
 		err := h.loadGitInfo()
 		if err != nil {
@@ -418,12 +452,6 @@ func newHugoSites(cfg deps.DepsCfg, d *deps.Deps, pageTrees *pageTrees, sites []
 	})
 
 	return h, nil
-}
-
-// Deprecated: Use hugo.IsServer instead.
-func (s *Site) IsServer() bool {
-	hugo.Deprecate(".Site.IsServer", "Use hugo.IsServer instead.", "v0.120.0")
-	return s.conf.Internal.Running
 }
 
 // Returns the server port.
@@ -438,13 +466,6 @@ func (s *Site) Title() string {
 
 func (s *Site) Copyright() string {
 	return s.conf.Copyright
-}
-
-// Deprecated: Use .Site.Home.OutputFormats.Get "rss" instead.
-func (s *Site) RSSLink() template.URL {
-	hugo.Deprecate(".Site.RSSLink", "Use the Output Format's Permalink method instead, e.g. .OutputFormats.Get \"RSS\".Permalink", "v0.114.0")
-	rssOutputFormat := s.home.OutputFormats().Get("rss")
-	return template.URL(rssOutputFormat.Permalink())
 }
 
 func (s *Site) Config() page.SiteConfig {
@@ -480,7 +501,10 @@ func (s *Site) MainSections() []string {
 
 // Returns a struct with some information about the build.
 func (s *Site) Hugo() hugo.HugoInfo {
-	if s.h == nil || s.h.hugoInfo.Environment == "" {
+	if s.h == nil {
+		panic("site: hugo: h not initialized")
+	}
+	if s.h.hugoInfo.Environment == "" {
 		panic("site: hugo: hugoInfo not initialized")
 	}
 	return s.h.hugoInfo
@@ -511,33 +535,21 @@ func (s *Site) Params() maps.Params {
 // Deprecated: Use taxonomies instead.
 func (s *Site) Author() map[string]any {
 	if len(s.conf.Author) != 0 {
-		hugo.Deprecate(".Site.Author", "Use taxonomies instead.", "v0.124.0")
+		hugo.Deprecate(".Site.Author", "Implement taxonomy 'author' or use .Site.Params.Author instead.", "v0.124.0")
 	}
 	return s.conf.Author
 }
 
 // Deprecated: Use taxonomies instead.
 func (s *Site) Authors() page.AuthorList {
-	hugo.Deprecate(".Site.Authors", "Use taxonomies instead.", "v0.124.0")
+	hugo.Deprecate(".Site.Authors", "Implement taxonomy 'authors' or use .Site.Params.Author instead.", "v0.124.0")
 	return page.AuthorList{}
 }
 
 // Deprecated: Use .Site.Params instead.
 func (s *Site) Social() map[string]string {
-	hugo.Deprecate(".Site.Social", "Use .Site.Params instead.", "v0.124.0")
+	hugo.Deprecate(".Site.Social", "Implement taxonomy 'social' or use .Site.Params.Social instead.", "v0.124.0")
 	return s.conf.Social
-}
-
-// Deprecated: Use .Site.Config.Services.Disqus.Shortname instead.
-func (s *Site) DisqusShortname() string {
-	hugo.Deprecate(".Site.DisqusShortname", "Use .Site.Config.Services.Disqus.Shortname instead.", "v0.120.0")
-	return s.Config().Services.Disqus.Shortname
-}
-
-// Deprecated: Use .Site.Config.Services.GoogleAnalytics.ID instead.
-func (s *Site) GoogleAnalytics() string {
-	hugo.Deprecate(".Site.GoogleAnalytics", "Use .Site.Config.Services.GoogleAnalytics.ID instead.", "v0.120.0")
-	return s.Config().Services.GoogleAnalytics.ID
 }
 
 func (s *Site) Param(key any) (any, error) {
@@ -622,6 +634,10 @@ func (s *Site) AllPages() page.Pages {
 func (s *Site) AllRegularPages() page.Pages {
 	s.CheckReady()
 	return s.h.RegularPages()
+}
+
+func (s *Site) Store() *maps.Scratch {
+	return s.store
 }
 
 func (s *Site) CheckReady() {
@@ -790,7 +806,7 @@ func (s *Site) initRenderFormats() {
 		Tree: s.pageMap.treePages,
 		Handle: func(key string, n contentNodeI, match doctree.DimensionFlag) (bool, error) {
 			if p, ok := n.(*pageState); ok {
-				for _, f := range p.m.configuredOutputFormats {
+				for _, f := range p.m.pageConfig.ConfiguredOutputFormats {
 					if !formatSet[f.Name] {
 						formats = append(formats, f)
 						formatSet[f.Name] = true
@@ -821,7 +837,7 @@ func (s *Site) initRenderFormats() {
 	s.renderFormats = formats
 }
 
-func (s *Site) GetRelatedDocsHandler() *page.RelatedDocsHandler {
+func (s *Site) GetInternalRelatedDocsHandler() *page.RelatedDocsHandler {
 	return s.relatedDocsHandler
 }
 
@@ -947,19 +963,24 @@ type WhatChanged struct {
 	mu sync.Mutex
 
 	needsPagesAssembly bool
-	identitySet        identity.Identities
+
+	ids map[identity.Identity]bool
+}
+
+func (w *WhatChanged) init() {
+	if w.ids == nil {
+		w.ids = make(map[identity.Identity]bool)
+	}
 }
 
 func (w *WhatChanged) Add(ids ...identity.Identity) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	if w.identitySet == nil {
-		w.identitySet = make(identity.Identities)
-	}
+	w.init()
 
 	for _, id := range ids {
-		w.identitySet[id] = true
+		w.ids[id] = true
 	}
 }
 
@@ -970,20 +991,20 @@ func (w *WhatChanged) Clear() {
 }
 
 func (w *WhatChanged) clear() {
-	w.identitySet = identity.Identities{}
+	w.ids = nil
 }
 
 func (w *WhatChanged) Changes() []identity.Identity {
-	if w == nil || w.identitySet == nil {
+	if w == nil || w.ids == nil {
 		return nil
 	}
-	return w.identitySet.AsSlice()
+	return xmaps.Keys(w.ids)
 }
 
 func (w *WhatChanged) Drain() []identity.Identity {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	ids := w.identitySet.AsSlice()
+	ids := w.Changes()
 	w.clear()
 	return ids
 }
@@ -1245,6 +1266,8 @@ func (s *Site) assembleMenus() error {
 			// If page is still nill, we must make sure that we have a URL that considers baseURL etc.
 			if types.IsNil(me.Page) {
 				me.ConfiguredURL = s.createNodeMenuEntryURL(me.MenuConfig.URL)
+			} else {
+				navigation.SetPageValues(me, me.Page)
 			}
 
 			flat[twoD{name, me.KeyName()}] = me
@@ -1361,6 +1384,7 @@ func (s *Site) getLanguagePermalinkLang(alwaysInSubDir bool) string {
 func (s *Site) resetBuildState(sourceChanged bool) {
 	s.relatedDocsHandler = s.relatedDocsHandler.Clone()
 	s.init.Reset()
+	s.pageMap.Reset()
 }
 
 func (s *Site) errorCollator(results <-chan error, errs chan<- error) {
@@ -1415,7 +1439,7 @@ const (
 	pageDependencyScopeGlobal
 )
 
-func (s *Site) renderAndWritePage(statCounter *uint64, name string, targetPath string, p *pageState, d any, templ tpl.Template) error {
+func (s *Site) renderAndWritePage(statCounter *uint64, name string, targetPath string, p *pageState, d any, templ *tplimpl.TemplInfo) error {
 	s.h.buildCounters.pageRenderCounter.Add(1)
 	renderBuffer := bp.GetBuffer()
 	defer bp.PutBuffer(renderBuffer)
@@ -1474,8 +1498,8 @@ var infoOnMissingLayout = map[string]bool{
 // hookRendererTemplate is the canonical implementation of all hooks.ITEMRenderer,
 // where ITEM is the thing being hooked.
 type hookRendererTemplate struct {
-	templateHandler tpl.TemplateHandler
-	templ           tpl.Template
+	templateHandler *tplimpl.TemplateStore
+	templ           *tplimpl.TemplInfo
 	resolvePosition func(ctx any) text.Position
 }
 
@@ -1511,7 +1535,7 @@ func (hr hookRendererTemplate) IsDefaultCodeBlockRenderer() bool {
 	return false
 }
 
-func (s *Site) renderForTemplate(ctx context.Context, name, outputFormat string, d any, w io.Writer, templ tpl.Template) (err error) {
+func (s *Site) renderForTemplate(ctx context.Context, name, outputFormat string, d any, w io.Writer, templ *tplimpl.TemplInfo) (err error) {
 	if templ == nil {
 		s.logMissingLayout(name, "", "", outputFormat)
 		return nil
@@ -1521,8 +1545,12 @@ func (s *Site) renderForTemplate(ctx context.Context, name, outputFormat string,
 		panic("nil context")
 	}
 
-	if err = s.Tmpl().ExecuteWithContext(ctx, templ, w, d); err != nil {
-		return fmt.Errorf("render of %q failed: %w", name, err)
+	if err = s.GetTemplateStore().ExecuteWithContext(ctx, templ, w, d); err != nil {
+		filename := name
+		if p, ok := d.(*pageState); ok {
+			filename = p.String()
+		}
+		return fmt.Errorf("render of %q failed: %w", filename, err)
 	}
 	return
 }
@@ -1556,7 +1584,7 @@ func (s *Site) render(ctx *siteRenderContext) (err error) {
 		return err
 	}
 
-	if ctx.outIdx == 0 {
+	if ctx.outIdx == 0 && s.h.buildCounter.Load() == 0 {
 		// Note that even if disableAliases is set, the aliases themselves are
 		// preserved on page. The motivation with this is to be able to generate
 		// 301 redirects in a .htaccess file and similar using a custom output format.

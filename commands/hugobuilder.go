@@ -27,7 +27,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bep/logg"
 	"github.com/bep/simplecobra"
 	"github.com/fsnotify/fsnotify"
 	"github.com/gohugoio/hugo/common/herrors"
@@ -63,7 +62,7 @@ type hugoBuilder struct {
 
 	// Currently only set when in "fast render mode".
 	changeDetector *fileChangeDetector
-	visitedURLs    *types.EvictingStringQueue
+	visitedURLs    *types.EvictingQueue[string]
 
 	fullRebuildSem *semaphore.Weighted
 	debounce       func(f func())
@@ -134,10 +133,6 @@ func (e *hugoBuilderErrState) wasErr() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.waserr
-}
-
-func (c *hugoBuilder) errCount() int {
-	return c.r.logger.LoggCount(logg.LevelError) + loggers.Log().LoggCount(logg.LevelError)
 }
 
 // getDirList provides NewWatcher() with a list of directories to watch for changes.
@@ -345,7 +340,6 @@ func (c *hugoBuilder) newWatcher(pollIntervalStr string, dirList ...string) (*wa
 		for {
 			select {
 			case changes := <-c.r.changesFromBuild:
-				c.errState.setBuildErr(nil)
 				unlock, err := h.LockBuild()
 				if err != nil {
 					c.r.logger.Errorln("Failed to acquire a build lock: %s", err)
@@ -358,7 +352,7 @@ func (c *hugoBuilder) newWatcher(pollIntervalStr string, dirList ...string) (*wa
 				}
 				if c.s != nil && c.s.doLiveReload {
 					doReload := c.changeDetector == nil || len(c.changeDetector.changed()) > 0
-					doReload = doReload || c.showErrorInBrowser && c.errCount() > 0
+					doReload = doReload || c.showErrorInBrowser && c.errState.buildErr() != nil
 					if doReload {
 						livereload.ForceRefresh()
 					}
@@ -372,7 +366,7 @@ func (c *hugoBuilder) newWatcher(pollIntervalStr string, dirList ...string) (*wa
 					return
 				}
 				c.handleEvents(watcher, staticSyncer, evs, configSet)
-				if c.showErrorInBrowser && c.errCount() > 0 {
+				if c.showErrorInBrowser && c.errState.buildErr() != nil {
 					// Need to reload browser to show the error
 					livereload.ForceRefresh()
 				}
@@ -419,11 +413,17 @@ func (c *hugoBuilder) build() error {
 }
 
 func (c *hugoBuilder) buildSites(noBuildLock bool) (err error) {
-	h, err := c.hugo()
+	defer func() {
+		c.errState.setBuildErr(err)
+	}()
+
+	var h *hugolib.HugoSites
+	h, err = c.hugo()
 	if err != nil {
-		return err
+		return
 	}
-	return h.Build(hugolib.BuildCfg{NoBuildLock: noBuildLock})
+	err = h.Build(hugolib.BuildCfg{NoBuildLock: noBuildLock})
+	return
 }
 
 func (c *hugoBuilder) copyStatic() (map[string]uint64, error) {
@@ -619,6 +619,9 @@ func (c *hugoBuilder) fullRebuild(changeType string) {
 			// Set the processing on pause until the state is recovered.
 			c.errState.setPaused(true)
 			c.handleBuildErr(err, "Failed to reload config")
+			if c.s.doLiveReload {
+				livereload.ForceRefresh()
+			}
 		} else {
 			c.errState.setPaused(false)
 		}
@@ -660,7 +663,20 @@ func (c *hugoBuilder) handleEvents(watcher *watcher.Batcher,
 	var n int
 	for _, ev := range evs {
 		keep := true
-		if ev.Has(fsnotify.Create) || ev.Has(fsnotify.Write) {
+		// Write and rename operations are often followed by CHMOD.
+		// There may be valid use cases for rebuilding the site on CHMOD,
+		// but that will require more complex logic than this simple conditional.
+		// On OS X this seems to be related to Spotlight, see:
+		// https://github.com/go-fsnotify/fsnotify/issues/15
+		// A workaround is to put your site(s) on the Spotlight exception list,
+		// but that may be a little mysterious for most end users.
+		// So, for now, we skip reload on CHMOD.
+		// We do have to check for WRITE though. On slower laptops a Chmod
+		// could be aggregated with other important events, and we still want
+		// to rebuild on those
+		if ev.Op == fsnotify.Chmod {
+			keep = false
+		} else if ev.Has(fsnotify.Create) || ev.Has(fsnotify.Write) {
 			if _, err := os.Stat(ev.Name); err != nil {
 				keep = false
 			}
@@ -802,21 +818,6 @@ func (c *hugoBuilder) handleEvents(watcher *watcher.Batcher,
 			continue
 		}
 
-		// Write and rename operations are often followed by CHMOD.
-		// There may be valid use cases for rebuilding the site on CHMOD,
-		// but that will require more complex logic than this simple conditional.
-		// On OS X this seems to be related to Spotlight, see:
-		// https://github.com/go-fsnotify/fsnotify/issues/15
-		// A workaround is to put your site(s) on the Spotlight exception list,
-		// but that may be a little mysterious for most end users.
-		// So, for now, we skip reload on CHMOD.
-		// We do have to check for WRITE though. On slower laptops a Chmod
-		// could be aggregated with other important events, and we still want
-		// to rebuild on those
-		if ev.Op&(fsnotify.Chmod|fsnotify.Write|fsnotify.Create) == fsnotify.Chmod {
-			continue
-		}
-
 		walkAdder := func(path string, f hugofs.FileMetaInfo) error {
 			if f.IsDir() {
 				c.r.logger.Println("adding created directory to watchlist", path)
@@ -917,7 +918,11 @@ func (c *hugoBuilder) handleEvents(watcher *watcher.Batcher,
 
 			changed := c.changeDetector.changed()
 			if c.changeDetector != nil {
-				lrl.Logf("build changed %d files", len(changed))
+				if len(changed) >= 10 {
+					lrl.Logf("build changed %d files", len(changed))
+				} else {
+					lrl.Logf("build changed %d files: %q", len(changed), changed)
+				}
 				if len(changed) == 0 {
 					// Nothing has changed.
 					return
@@ -963,10 +968,13 @@ func (c *hugoBuilder) handleEvents(watcher *watcher.Batcher,
 					pathToRefresh := h.PathSpec.RelURL(paths.ToSlashTrimLeading(otherChanges[0]), false)
 					lrl.Logf("refreshing %q", pathToRefresh)
 					livereload.RefreshPath(pathToRefresh)
-				} else if len(cssChanges) == 0 {
+				} else if len(cssChanges) == 0 || len(otherChanges) > 1 {
 					lrl.Logf("force refresh")
 					livereload.ForceRefresh()
 				}
+			} else {
+				lrl.Logf("force refresh")
+				livereload.ForceRefresh()
 			}
 
 			if len(cssChanges) > 0 {
@@ -1081,37 +1089,44 @@ func (c *hugoBuilder) printChangeDetected(typ string) {
 	c.r.logger.Println(htime.Now().Format(layout))
 }
 
-func (c *hugoBuilder) rebuildSites(events []fsnotify.Event) error {
+func (c *hugoBuilder) rebuildSites(events []fsnotify.Event) (err error) {
+	defer func() {
+		c.errState.setBuildErr(err)
+	}()
 	if err := c.errState.buildErr(); err != nil {
 		ferrs := herrors.UnwrapFileErrorsWithErrorContext(err)
 		for _, err := range ferrs {
 			events = append(events, fsnotify.Event{Name: err.Position().Filename, Op: fsnotify.Write})
 		}
 	}
-	c.errState.setBuildErr(nil)
-	h, err := c.hugo()
+	var h *hugolib.HugoSites
+	h, err = c.hugo()
 	if err != nil {
-		return err
+		return
 	}
-
-	return h.Build(hugolib.BuildCfg{NoBuildLock: true, RecentlyVisited: c.visitedURLs, ErrRecovery: c.errState.wasErr()}, events...)
+	err = h.Build(hugolib.BuildCfg{NoBuildLock: true, RecentlyTouched: c.visitedURLs, ErrRecovery: c.errState.wasErr()}, events...)
+	return
 }
 
-func (c *hugoBuilder) rebuildSitesForChanges(ids []identity.Identity) error {
-	c.errState.setBuildErr(nil)
-	h, err := c.hugo()
+func (c *hugoBuilder) rebuildSitesForChanges(ids []identity.Identity) (err error) {
+	defer func() {
+		c.errState.setBuildErr(err)
+	}()
+
+	var h *hugolib.HugoSites
+	h, err = c.hugo()
 	if err != nil {
-		return err
+		return
 	}
 	whatChanged := &hugolib.WhatChanged{}
 	whatChanged.Add(ids...)
-	err = h.Build(hugolib.BuildCfg{NoBuildLock: true, WhatChanged: whatChanged, RecentlyVisited: c.visitedURLs, ErrRecovery: c.errState.wasErr()})
-	c.errState.setBuildErr(err)
-	return err
+	err = h.Build(hugolib.BuildCfg{NoBuildLock: true, WhatChanged: whatChanged, RecentlyTouched: c.visitedURLs, ErrRecovery: c.errState.wasErr()})
+
+	return
 }
 
 func (c *hugoBuilder) reloadConfig() error {
-	c.r.Reset()
+	c.r.resetLogs()
 	c.r.configVersionID.Add(1)
 
 	if err := c.withConfE(func(conf *commonConfig) error {

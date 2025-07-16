@@ -52,7 +52,7 @@ Desc: {{ sort (sort $values "b" "desc") "a" "desc" }}
 
   `
 
-	for i := 0; i < 4; i++ {
+	for range 4 {
 
 		b := hugolib.NewIntegrationTestBuilder(
 			hugolib.IntegrationTestConfig{
@@ -122,7 +122,7 @@ func TestAppendNilsToSliceWithNils(t *testing.T) {
 
   `
 
-	for i := 0; i < 4; i++ {
+	for range 4 {
 
 		b := hugolib.NewIntegrationTestBuilder(
 			hugolib.IntegrationTestConfig{
@@ -248,4 +248,53 @@ tags: ['tag-b']
 		"1: List2: 2|\n1: Intersect: 2|\n1: Union: 3|\n1: SymDiff: 1|\n1: Uniq: 3|\n\n\n2: List1: 3|\n2: List2: 1|",
 		"2: Intersect: 1|\n2: Union: 3|\n2: SymDiff: 2|\n2: Uniq: 3|",
 	)
+}
+
+// Issue #13181
+func TestUnionResourcesMatch(t *testing.T) {
+	t.Parallel()
+
+	files := `
+-- config.toml --
+disableKinds = ['rss','sitemap', 'taxonomy', 'term', 'page']
+-- layouts/index.html --
+{{ $a := resources.Match "*a*" }}
+{{ $b := resources.Match "*b*" }}
+{{ $union := $a | union $b }}
+{{ range $i, $e := $union }}
+{{ $i }}: {{ .Name }}
+{{ end }}$
+-- assets/a1.html --
+<div>file1</div>
+-- assets/a2.html --
+<div>file2</div>
+-- assets/a3_b1.html --
+<div>file3</div>
+-- assets/b2.html --
+<div>file4</div>
+`
+
+	b := hugolib.Test(t, files)
+
+	b.AssertFileContentExact("public/index.html", "0: /a3_b1.html\n\n1: /b2.html\n\n2: /a1.html\n\n3: /a2.html\n$")
+}
+
+// Issue 13621.
+func TestWhereNotInEmptySlice(t *testing.T) {
+	t.Parallel()
+
+	files := `
+-- hugo.toml --
+-- layouts/home.html --
+{{- $pages := where site.RegularPages "Kind" "not in" (slice) -}}
+Len: {{  $pages | len }}|
+-- layouts/all.html --
+All|{{ .Title }}|
+-- content/p1.md --
+
+`
+
+	b := hugolib.Test(t, files)
+
+	b.AssertFileContent("public/index.html", "Len: 1|")
 }

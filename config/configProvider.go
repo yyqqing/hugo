@@ -58,7 +58,7 @@ type AllProvider interface {
 	BuildDrafts() bool
 	Running() bool
 	Watching() bool
-	NewIdentityManager(name string) identity.Manager
+	NewIdentityManager(name string, opts ...identity.ManagerOption) identity.Manager
 	FastRenderMode() bool
 	PrintUnusedTemplates() bool
 	EnableMissingTranslationPlaceholders() bool
@@ -76,7 +76,7 @@ type AllProvider interface {
 }
 
 // We cannot import the media package as that would create a circular dependency.
-// This interface defineds a sub set of what media.ContentTypes provides.
+// This interface defines a subset of what media.ContentTypes provides.
 type ContentTypesProvider interface {
 	IsContentSuffix(suffix string) bool
 	IsContentFile(filename string) bool

@@ -14,7 +14,6 @@
 package page
 
 import (
-	"html/template"
 	"time"
 
 	"github.com/gohugoio/hugo/common/maps"
@@ -53,9 +52,6 @@ type Site interface {
 
 	// A shortcut to the home
 	Home() Page
-
-	// Deprecated: Use hugo.IsServer instead.
-	IsServer() bool
 
 	// Returns the server port.
 	ServerPort() int
@@ -109,19 +105,13 @@ type Site interface {
 	Config() SiteConfig
 
 	// Deprecated: Use taxonomies instead.
-	Author() map[string]interface{}
+	Author() map[string]any
 
 	// Deprecated: Use taxonomies instead.
 	Authors() AuthorList
 
 	// Deprecated: Use .Site.Params instead.
 	Social() map[string]string
-
-	// Deprecated: Use Config().Services.GoogleAnalytics instead.
-	GoogleAnalytics() string
-
-	// Deprecated: Use Config().Privacy.Disqus instead.
-	DisqusShortname() string
 
 	// BuildDrafts is deprecated and will be removed in a future release.
 	BuildDrafts() bool
@@ -132,8 +122,7 @@ type Site interface {
 	// LanguagePrefix returns the language prefix for this site.
 	LanguagePrefix() string
 
-	// Deprecated: Use .Site.Home.OutputFormats.Get "rss" instead.
-	RSSLink() template.URL
+	maps.StoreProvider
 
 	// For internal use only.
 	// This will panic if the site is not fully initialized.
@@ -184,18 +173,13 @@ func (s *siteWrapper) Social() map[string]string {
 }
 
 // Deprecated: Use taxonomies instead.
-func (s *siteWrapper) Author() map[string]interface{} {
+func (s *siteWrapper) Author() map[string]any {
 	return s.s.Author()
 }
 
 // Deprecated: Use taxonomies instead.
 func (s *siteWrapper) Authors() AuthorList {
 	return s.s.Authors()
-}
-
-// Deprecated: Use .Site.Config.Services.GoogleAnalytics.ID instead.
-func (s *siteWrapper) GoogleAnalytics() string {
-	return s.s.GoogleAnalytics()
 }
 
 func (s *siteWrapper) GetPage(ref ...string) (Page, error) {
@@ -228,11 +212,6 @@ func (s *siteWrapper) Sections() Pages {
 
 func (s *siteWrapper) Home() Page {
 	return s.s.Home()
-}
-
-// Deprecated: Use hugo.IsServer instead.
-func (s *siteWrapper) IsServer() bool {
-	return s.s.IsServer()
 }
 
 func (s *siteWrapper) ServerPort() int {
@@ -313,18 +292,12 @@ func (s *siteWrapper) IsMultiLingual() bool {
 	return s.s.IsMultiLingual()
 }
 
-// Deprecated: Use .Site.Config.Services.Disqus.Shortname instead.
-func (s *siteWrapper) DisqusShortname() string {
-	return s.s.DisqusShortname()
-}
-
 func (s *siteWrapper) LanguagePrefix() string {
 	return s.s.LanguagePrefix()
 }
 
-// Deprecated: Use .Site.Home.OutputFormats.Get "rss" instead.
-func (s *siteWrapper) RSSLink() template.URL {
-	return s.s.RSSLink()
+func (s *siteWrapper) Store() *maps.Scratch {
+	return s.s.Store()
 }
 
 // For internal use only.
@@ -343,7 +316,7 @@ type testSite struct {
 }
 
 // Deprecated: Use taxonomies instead.
-func (s testSite) Author() map[string]interface{} {
+func (s testSite) Author() map[string]any {
 	return nil
 }
 
@@ -410,18 +383,8 @@ func (t testSite) Languages() langs.Languages {
 	return nil
 }
 
-// Deprecated: Use .Site.Config.Services.GoogleAnalytics.ID instead.
-func (t testSite) GoogleAnalytics() string {
-	return ""
-}
-
 func (t testSite) MainSections() []string {
 	return nil
-}
-
-// Deprecated: Use hugo.IsServer instead.
-func (t testSite) IsServer() bool {
-	return false
 }
 
 func (t testSite) Language() *langs.Language {
@@ -468,11 +431,6 @@ func (s testSite) Config() SiteConfig {
 	return SiteConfig{}
 }
 
-// Deprecated: Use .Site.Config.Services.Disqus.Shortname instead.
-func (testSite) DisqusShortname() string {
-	return ""
-}
-
 func (s testSite) BuildDrafts() bool {
 	return false
 }
@@ -486,9 +444,8 @@ func (s testSite) Param(key any) (any, error) {
 	return nil, nil
 }
 
-// Deprecated: Use .Site.Home.OutputFormats.Get "rss" instead.
-func (s testSite) RSSLink() template.URL {
-	return ""
+func (s testSite) Store() *maps.Scratch {
+	return maps.NewScratch()
 }
 
 func (s testSite) CheckReady() {

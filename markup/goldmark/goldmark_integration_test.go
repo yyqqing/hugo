@@ -157,7 +157,7 @@ title: "p1"
 	b := hugolib.Test(t, files)
 
 	b.AssertFileContent("public/p1/index.html",
-		"<h2 id=\"hello-testhttpsexamplecom\">\n  Hello <a href=\"https://example.com\">Test</a>\n\n  <a class=\"anchor\" href=\"#hello-testhttpsexamplecom\">#</a>\n</h2>",
+		"<h2 id=\"hello-test\">\n  Hello <a href=\"https://example.com\">Test</a>\n\n  <a class=\"anchor\" href=\"#hello-test\">#</a>\n</h2>",
 	)
 }
 
@@ -527,6 +527,39 @@ a <!-- b --> c
 	)
 }
 
+// Issue 13286
+func TestImageAltApostrophesWithTypographer(t *testing.T) {
+	t.Parallel()
+
+	files := `
+-- hugo.toml --
+[markup.goldmark.extensions.typographer]
+disable = false
+ [markup.goldmark.renderHooks.image]
+ enableDefault = true
+-- content/p1.md --
+---
+title: "p1"
+---
+
+## Image
+
+![A's is > than B's](some-image.png)
+
+
+-- layouts/_default/single.html --
+{{ .Content }}
+`
+
+	b := hugolib.Test(t, files)
+
+	b.AssertFileContentExact("public/p1/index.html",
+		// Note that this markup is slightly different than the one produced by the default Goldmark renderer,
+		// see issue 13292.
+		"alt=\"A’s is &gt; than B’s\">",
+	)
+}
+
 // Issue #7332
 // Issue #11587
 func TestGoldmarkEmojiExtension(t *testing.T) {
@@ -801,4 +834,130 @@ H~2~0
 		"<p>H<sub>2</sub>0</p>",
 		"<p>1<sup>st</sup></p>",
 	)
+}
+
+// Issue 12997.
+func TestGoldmarkRawHTMLWarningBlocks(t *testing.T) {
+	files := `
+-- hugo.toml --
+disableKinds = ['home','rss','section','sitemap','taxonomy','term']
+markup.goldmark.renderer.unsafe = false
+-- content/p1.md --
+---
+title: "p1"
+---
+<div>Some raw HTML</div>
+-- layouts/_default/single.html --
+{{ .Content }}
+`
+
+	b := hugolib.Test(t, files, hugolib.TestOptWarn())
+
+	b.AssertFileContent("public/p1/index.html", "<!-- raw HTML omitted -->")
+	b.AssertLogContains("WARN  Raw HTML omitted while rendering \"/content/p1.md\"; see https://gohugo.io/getting-started/configuration-markup/#rendererunsafe\nYou can suppress this warning by adding the following to your site configuration:\nignoreLogs = ['warning-goldmark-raw-html']")
+
+	b = hugolib.Test(t, strings.ReplaceAll(files, "markup.goldmark.renderer.unsafe = false", "markup.goldmark.renderer.unsafe = true"), hugolib.TestOptWarn())
+	b.AssertFileContent("public/p1/index.html", "! <!-- raw HTML omitted -->")
+	b.AssertLogContains("! WARN")
+}
+
+func TestGoldmarkRawHTMLWarningInline(t *testing.T) {
+	files := `
+-- hugo.toml --
+disableKinds = ['home','rss','section','sitemap','taxonomy','term']
+markup.goldmark.renderer.unsafe = false
+-- content/p1.md --
+---
+title: "p1"
+---
+<em>raw HTML</em>
+-- layouts/_default/single.html --
+{{ .Content }}
+`
+
+	b := hugolib.Test(t, files, hugolib.TestOptWarn())
+
+	b.AssertFileContent("public/p1/index.html", "<!-- raw HTML omitted -->")
+	b.AssertLogContains("WARN  Raw HTML omitted while rendering \"/content/p1.md\"; see https://gohugo.io/getting-started/configuration-markup/#rendererunsafe\nYou can suppress this warning by adding the following to your site configuration:\nignoreLogs = ['warning-goldmark-raw-html']")
+
+	b = hugolib.Test(t, strings.ReplaceAll(files, "markup.goldmark.renderer.unsafe = false", "markup.goldmark.renderer.unsafe = true"), hugolib.TestOptWarn())
+	b.AssertFileContent("public/p1/index.html", "! <!-- raw HTML omitted -->")
+	b.AssertLogContains("! WARN")
+}
+
+// See https://github.com/gohugoio/hugo/issues/13278#issuecomment-2603280548
+func TestGoldmarkRawHTMLCommentNoWarning(t *testing.T) {
+	files := `
+-- hugo.toml --
+disableKinds = ['home','rss','section','sitemap','taxonomy','term']
+markup.goldmark.renderer.unsafe = false
+-- content/p1.md --
+---
+title: "p1"
+---
+# HTML comments
+
+## Simple 
+<!-- This is a comment -->
+
+    <!-- This is a comment indented -->
+
+	**Hello**<!-- This is a comment indented with markup surrounding. -->_world_.
+## With HTML
+
+<!-- <p>This is another paragraph </p> -->
+
+## With HTML and JS
+
+<!-- <script>alert('hello');</script> -->
+
+## With Block
+
+<!--
+<p>Look at this cool image:</p>
+<img border="0" src="pic_trulli.jpg" alt="Trulli">
+-->
+
+## XSS 
+
+<!-- --><script>alert("I just escaped the HTML comment")</script><!-- -->
+
+
+## More
+
+This is a <!--hidden--> word.
+
+This is a <!-- hidden--> word.
+
+This is a <!-- hidden --> word.
+
+This is a <!-- 
+hidden --> word.
+
+This is a <!-- 
+hidden
+--> word.
+
+
+-- layouts/_default/single.html --
+{{ .Content }}
+`
+
+	b := hugolib.Test(t, files, hugolib.TestOptWarn())
+
+	b.AssertFileContent("public/p1/index.html",
+		"! <!-- raw HTML omitted -->",
+		"! <!-- hidden -->",
+		"! <!-- This is a comment -->",
+		"! script",
+	)
+	b.AssertLogContains("! WARN")
+
+	b = hugolib.Test(t, strings.ReplaceAll(files, "markup.goldmark.renderer.unsafe = false", "markup.goldmark.renderer.unsafe = true"), hugolib.TestOptWarn())
+	b.AssertFileContent("public/p1/index.html",
+		"! <!-- raw HTML omitted -->",
+		"<!-- hidden -->",
+		"<!-- This is a comment -->",
+	)
+	b.AssertLogContains("! WARN")
 }

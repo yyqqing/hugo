@@ -39,9 +39,9 @@ import (
 
 	"github.com/gohugoio/hugo/common/hstrings"
 	"github.com/gohugoio/hugo/common/htime"
-	"github.com/gohugoio/hugo/common/hugo"
 	"github.com/gohugoio/hugo/common/loggers"
 	"github.com/gohugoio/hugo/common/paths"
+	"github.com/gohugoio/hugo/common/types"
 	"github.com/gohugoio/hugo/config"
 	"github.com/gohugoio/hugo/config/allconfig"
 	"github.com/gohugoio/hugo/deps"
@@ -66,6 +66,12 @@ func Execute(args []string) error {
 	}
 	args = mapLegacyArgs(args)
 	cd, err := x.Execute(context.Background(), args)
+	if cd != nil {
+		if closer, ok := cd.Root.Command.(types.Closer); ok {
+			closer.Close()
+		}
+	}
+
 	if err != nil {
 		if err == errHelp {
 			cd.CobraCommand.Help()
@@ -95,9 +101,10 @@ type configKey struct {
 
 // This is the root command.
 type rootCommand struct {
-	Printf  func(format string, v ...interface{})
-	Println func(a ...interface{})
-	Out     io.Writer
+	Printf  func(format string, v ...any)
+	Println func(a ...any)
+	StdOut  io.Writer
+	StdErr  io.Writer
 
 	logger loggers.Logger
 
@@ -134,8 +141,6 @@ type rootCommand struct {
 
 	logLevel string
 
-	verbose bool
-	debug   bool
 	quiet   bool
 	devMode bool // Hidden flag.
 
@@ -147,6 +152,18 @@ type rootCommand struct {
 
 func (r *rootCommand) isVerbose() bool {
 	return r.logger.Level() <= logg.LevelInfo
+}
+
+func (r *rootCommand) Close() error {
+	if r.hugoSites != nil {
+		r.hugoSites.DeleteFunc(func(key configKey, value *hugolib.HugoSites) bool {
+			if value != nil {
+				value.Close()
+			}
+			return false
+		})
+	}
+	return nil
 }
 
 func (r *rootCommand) Build(cd *simplecobra.Commandeer, bcfg hugolib.BuildCfg, cfg config.Provider) (*hugolib.HugoSites, error) {
@@ -340,7 +357,7 @@ func (r *rootCommand) getOrCreateHugo(cfg config.Provider, ignoreModuleDoesNotEx
 }
 
 func (r *rootCommand) newDepsConfig(conf *commonConfig) deps.DepsCfg {
-	return deps.DepsCfg{Configs: conf.configs, Fs: conf.fs, LogOut: r.logger.Out(), LogLevel: r.logger.Level(), ChangesFromBuild: r.changesFromBuild}
+	return deps.DepsCfg{Configs: conf.configs, Fs: conf.fs, StdOut: r.logger.StdOut(), StdErr: r.logger.StdErr(), LogLevel: r.logger.Level(), ChangesFromBuild: r.changesFromBuild}
 }
 
 func (r *rootCommand) Name() string {
@@ -405,21 +422,23 @@ func (r *rootCommand) Run(ctx context.Context, cd *simplecobra.Commandeer, args 
 }
 
 func (r *rootCommand) PreRun(cd, runner *simplecobra.Commandeer) error {
-	r.Out = os.Stdout
+	r.StdOut = os.Stdout
+	r.StdErr = os.Stderr
 	if r.quiet {
-		r.Out = io.Discard
+		r.StdOut = io.Discard
+		r.StdErr = io.Discard
 	}
 	// Used by mkcert (server).
-	log.SetOutput(r.Out)
+	log.SetOutput(r.StdOut)
 
-	r.Printf = func(format string, v ...interface{}) {
+	r.Printf = func(format string, v ...any) {
 		if !r.quiet {
-			fmt.Fprintf(r.Out, format, v...)
+			fmt.Fprintf(r.StdOut, format, v...)
 		}
 	}
-	r.Println = func(a ...interface{}) {
+	r.Println = func(a ...any) {
 		if !r.quiet {
-			fmt.Fprintln(r.Out, a...)
+			fmt.Fprintln(r.StdOut, a...)
 		}
 	}
 	_, running := runner.Command.(*serverCommand)
@@ -428,6 +447,8 @@ func (r *rootCommand) PreRun(cd, runner *simplecobra.Commandeer) error {
 	if err != nil {
 		return err
 	}
+	// Set up the global logger early to allow info deprecations during config load.
+	loggers.SetGlobalLogger(r.logger)
 
 	r.changesFromBuild = make(chan []identity.Identity, 10)
 
@@ -463,32 +484,21 @@ func (r *rootCommand) createLogger(running bool) (loggers.Logger, error) {
 			default:
 				return nil, fmt.Errorf("invalid log level: %q, must be one of debug, warn, info or error", r.logLevel)
 			}
-		} else {
-			if r.verbose {
-				hugo.Deprecate("--verbose", "use --logLevel info", "v0.114.0")
-				hugo.Deprecate("--verbose", "use --logLevel info", "v0.114.0")
-				level = logg.LevelInfo
-			}
-
-			if r.debug {
-				hugo.Deprecate("--debug", "use --logLevel debug", "v0.114.0")
-				level = logg.LevelDebug
-			}
 		}
 	}
 
 	optsLogger := loggers.Options{
 		DistinctLevel: logg.LevelWarn,
 		Level:         level,
-		Stdout:        r.Out,
-		Stderr:        r.Out,
+		StdOut:        r.StdOut,
+		StdErr:        r.StdErr,
 		StoreErrors:   running,
 	}
 
 	return loggers.New(optsLogger), nil
 }
 
-func (r *rootCommand) Reset() {
+func (r *rootCommand) resetLogs() {
 	r.logger.Reset()
 	loggers.Log().Reset()
 }
@@ -509,7 +519,7 @@ func (r *rootCommand) initRootCommand(subCommandName string, cd *simplecobra.Com
 		commandName = subCommandName
 	}
 	cmd.Use = fmt.Sprintf("%s [flags]", commandName)
-	cmd.Short = fmt.Sprintf("%s builds your site", commandName)
+	cmd.Short = "Build your site"
 	cmd.Long = `COMMAND_NAME is the main command, used to build your Hugo site.
 
 Hugo is a Fast and Flexible Static Site Generator
@@ -530,6 +540,7 @@ Complete documentation is available at https://gohugo.io/.`
 	cmd.PersistentFlags().StringP("themesDir", "", "", "filesystem path to themes directory")
 	_ = cmd.MarkFlagDirname("themesDir")
 	cmd.PersistentFlags().StringP("ignoreVendorPaths", "", "", "ignores any _vendor for module paths matching the given Glob pattern")
+	cmd.PersistentFlags().BoolP("noBuildLock", "", false, "don't create .hugo_build.lock file")
 	_ = cmd.RegisterFlagCompletionFunc("ignoreVendorPaths", cobra.NoFileCompletions)
 	cmd.PersistentFlags().String("clock", "", "set the clock used by Hugo, e.g. --clock 2021-11-06T22:30:00.00+09:00")
 	_ = cmd.RegisterFlagCompletionFunc("clock", cobra.NoFileCompletions)
@@ -541,8 +552,6 @@ Complete documentation is available at https://gohugo.io/.`
 	cmd.PersistentFlags().BoolVar(&r.quiet, "quiet", false, "build in quiet mode")
 	cmd.PersistentFlags().BoolVarP(&r.renderToMemory, "renderToMemory", "M", false, "render to memory (mostly useful when running the server)")
 
-	cmd.PersistentFlags().BoolVarP(&r.verbose, "verbose", "v", false, "verbose output")
-	cmd.PersistentFlags().BoolVarP(&r.debug, "debug", "", false, "debug output")
 	cmd.PersistentFlags().BoolVarP(&r.devMode, "devMode", "", false, "only used for internal testing, flag hidden.")
 	cmd.PersistentFlags().StringVar(&r.logLevel, "logLevel", "", "log level (debug|info|warn|error)")
 	_ = cmd.RegisterFlagCompletionFunc("logLevel", cobra.FixedCompletions([]string{"debug", "info", "warn", "error"}, cobra.ShellCompDirectiveNoFileComp))
@@ -587,7 +596,6 @@ func applyLocalFlagsBuild(cmd *cobra.Command, r *rootCommand) {
 	cmd.Flags().BoolVar(&r.forceSyncStatic, "forceSyncStatic", false, "copy all files when static is changed.")
 	cmd.Flags().BoolP("noTimes", "", false, "don't sync modification time of files")
 	cmd.Flags().BoolP("noChmod", "", false, "don't sync permission mode of files")
-	cmd.Flags().BoolP("noBuildLock", "", false, "don't create .hugo_build.lock file")
 	cmd.Flags().BoolP("printI18nWarnings", "", false, "print missing translations")
 	cmd.Flags().BoolP("printPathWarnings", "", false, "print warnings on duplicate target paths etc.")
 	cmd.Flags().BoolP("printUnusedTemplates", "", false, "print warnings on unused templates.")

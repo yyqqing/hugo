@@ -21,7 +21,6 @@ import (
 	"github.com/gohugoio/hugo/lazy"
 	"github.com/gohugoio/hugo/markup/converter"
 	"github.com/gohugoio/hugo/navigation"
-	"github.com/gohugoio/hugo/output/layouts"
 	"github.com/gohugoio/hugo/resources/page"
 	"github.com/gohugoio/hugo/resources/resource"
 	"github.com/gohugoio/hugo/source"
@@ -56,9 +55,7 @@ type pageCommon struct {
 	store *maps.Scratch
 
 	// All of these represents the common parts of a page.Page
-	maps.Scratcher
 	navigation.PageMenusProvider
-	page.AuthorProvider
 	page.AlternativeOutputFormatsProvider
 	page.ChildCareProvider
 	page.FileProvider
@@ -70,7 +67,6 @@ type pageCommon struct {
 	page.PageMetaInternalProvider
 	page.Positioner
 	page.RawContentProvider
-	page.RelatedKeywordsProvider
 	page.RefProvider
 	page.ShortcodeInfoProvider
 	page.SitesProvider
@@ -89,11 +85,8 @@ type pageCommon struct {
 	// should look like.
 	targetPathDescriptor page.TargetPathDescriptor
 
-	layoutDescriptor     layouts.LayoutDescriptor
-	layoutDescriptorInit sync.Once
-
 	// Set if feature enabled and this is in a Git repo.
-	gitInfo    source.GitInfo
+	gitInfo    *source.GitInfo
 	codeowners []string
 
 	// Positional navigation
@@ -104,7 +97,7 @@ type pageCommon struct {
 	pageMenus *pageMenus
 
 	// Internal use
-	page.InternalDependencies
+	page.RelatedDocsHandlerProvider
 
 	contentConverterInit sync.Once
 	contentConverter     converter.Converter
@@ -112,4 +105,9 @@ type pageCommon struct {
 
 func (p *pageCommon) Store() *maps.Scratch {
 	return p.store
+}
+
+// See issue 13016.
+func (p *pageCommon) Scratch() *maps.Scratch {
+	return p.Store()
 }

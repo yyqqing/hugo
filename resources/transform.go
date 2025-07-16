@@ -52,11 +52,16 @@ var (
 	_ identity.IdentityGroupProvider     = (*resourceAdapterInner)(nil)
 	_ resource.Source                    = (*resourceAdapter)(nil)
 	_ resource.Identifier                = (*resourceAdapter)(nil)
+	_ resource.TransientIdentifier       = (*resourceAdapter)(nil)
+	_ targetPathProvider                 = (*resourceAdapter)(nil)
+	_ sourcePathProvider                 = (*resourceAdapter)(nil)
+	_ resource.Identifier                = (*resourceAdapter)(nil)
 	_ resource.ResourceNameTitleProvider = (*resourceAdapter)(nil)
 	_ resource.WithResourceMetaProvider  = (*resourceAdapter)(nil)
 	_ identity.DependencyManagerProvider = (*resourceAdapter)(nil)
 	_ identity.IdentityGroupProvider     = (*resourceAdapter)(nil)
 	_ resource.NameNormalizedProvider    = (*resourceAdapter)(nil)
+	_ isPublishedProvider                = (*resourceAdapter)(nil)
 )
 
 // These are transformations that need special support in Hugo that may not
@@ -188,10 +193,6 @@ func (r *resourceAdapter) Content(ctx context.Context) (any, error) {
 	return r.target.Content(ctx)
 }
 
-func (r *resourceAdapter) Err() resource.ResourceError {
-	return nil
-}
-
 func (r *resourceAdapter) GetIdentity() identity.Identity {
 	return identity.FirstIdentity(r.target)
 }
@@ -277,6 +278,23 @@ func (r *resourceAdapter) Key() string {
 	return r.target.(resource.Identifier).Key()
 }
 
+func (r *resourceAdapter) TransientKey() string {
+	return r.Key()
+}
+
+func (r *resourceAdapter) targetPath() string {
+	r.init(false, false)
+	return r.target.(targetPathProvider).targetPath()
+}
+
+func (r *resourceAdapter) sourcePath() string {
+	r.init(false, false)
+	if sp, ok := r.target.(sourcePathProvider); ok {
+		return sp.sourcePath()
+	}
+	return ""
+}
+
 func (r *resourceAdapter) MediaType() media.Type {
 	r.init(false, false)
 	return r.target.MediaType()
@@ -306,6 +324,11 @@ func (r *resourceAdapter) Publish() error {
 	r.init(false, false)
 
 	return r.target.Publish()
+}
+
+func (r *resourceAdapter) isPublished() bool {
+	r.init(false, false)
+	return r.target.isPublished()
 }
 
 func (r *resourceAdapter) ReadSeekCloser() (hugio.ReadSeekCloser, error) {
@@ -371,7 +394,6 @@ func (r *resourceAdapter) getImageOps() images.ImageResourceOps {
 		if r.MediaType().SubType == "svg" {
 			panic("this method is only available for raster images. To determine if an image is SVG, you can do {{ if eq .MediaType.SubType \"svg\" }}{{ end }}")
 		}
-		fmt.Println(r.MediaType().SubType)
 		panic("this method is only available for image resources")
 	}
 	r.init(false, false)

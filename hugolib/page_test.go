@@ -1688,6 +1688,32 @@ title: Scratch Me!
 	b.AssertFileContent("public/scratchme/index.html", "C: cv")
 }
 
+// Issue 13016.
+func TestScratchAliasToStore(t *testing.T) {
+	t.Parallel()
+
+	files := `
+-- hugo.toml --
+disableKinds = ["taxonomy", "term", "page", "section"]
+disableLiveReload = true
+-- layouts/index.html --
+{{ .Scratch.Set "a" "b" }}
+{{ .Store.Set "c" "d" }}
+.Scratch eq .Store: {{ eq .Scratch .Store }}
+a: {{ .Store.Get "a" }}
+c: {{ .Scratch.Get "c" }}
+
+`
+
+	b := Test(t, files)
+
+	b.AssertFileContent("public/index.html",
+		".Scratch eq .Store: true",
+		"a: b",
+		"c: d",
+	)
+}
+
 func TestPageParam(t *testing.T) {
 	t.Parallel()
 
@@ -1866,4 +1892,169 @@ func TestRenderWithoutArgument(t *testing.T) {
 	).BuildE()
 
 	b.Assert(err, qt.IsNotNil)
+}
+
+// Issue #13021
+func TestAllStores(t *testing.T) {
+	t.Parallel()
+
+	files := `
+-- hugo.toml --
+disableKinds = ["taxonomy", "term", "page", "section"]
+disableLiveReload = true
+-- content/_index.md --
+---
+title: "Home"
+---
+{{< s >}}
+-- layouts/shortcodes/s.html --
+{{ if not (.Store.Get "Shortcode") }}{{ .Store.Set "Shortcode" (printf "sh-%s" $.Page.Title) }}{{ end }}
+Shortcode: {{ .Store.Get "Shortcode" }}|
+-- layouts/index.html --
+{{ .Content }}
+{{ if not (.Store.Get "Page") }}{{ .Store.Set "Page" (printf "p-%s" $.Title) }}{{ end }}
+{{ if not (hugo.Store.Get "Hugo") }}{{ hugo.Store.Set "Hugo" (printf "h-%s" $.Title) }}{{ end }}
+{{ if not (site.Store.Get "Site") }}{{ site.Store.Set "Site" (printf "s-%s" $.Title) }}{{ end }}
+Page: {{ .Store.Get "Page" }}|
+Hugo: {{ hugo.Store.Get "Hugo" }}|
+Site: {{ site.Store.Get "Site" }}|
+`
+
+	b := TestRunning(t, files)
+
+	b.AssertFileContent("public/index.html",
+		`
+Shortcode: sh-Home|
+Page: p-Home|
+Site: s-Home|
+Hugo: h-Home|
+`,
+	)
+
+	b.EditFileReplaceAll("content/_index.md", "Home", "Homer").Build()
+
+	b.AssertFileContent("public/index.html",
+		`
+Shortcode: sh-Homer|
+Page: p-Homer|
+Site: s-Home|
+Hugo: h-Home|
+`,
+	)
+}
+
+// See #12484
+func TestPageFrontMatterDeprecatePathKindLang(t *testing.T) {
+	// This cannot be parallel as it depends on output from the global logger.
+
+	files := `
+-- hugo.toml --
+disableKinds = ["taxonomy", "term", "home", "section"]
+-- content/p1.md --
+---
+title: "p1"
+kind: "page"
+lang: "en"
+path: "mypath"
+---
+-- layouts/_default/single.html --
+Title: {{ .Title }}
+`
+	b := Test(t, files, TestOptWarn())
+	b.AssertFileContent("public/mypath/index.html", "p1")
+	b.AssertLogContains(
+		"deprecated: kind in front matter was deprecated",
+		"deprecated: lang in front matter was deprecated",
+		"deprecated: path in front matter was deprecated",
+	)
+}
+
+// Issue 13538
+func TestHomePageIsLeafBundle(t *testing.T) {
+	t.Parallel()
+
+	files := `
+-- hugo.toml --
+defaultContentLanguage = 'de'
+defaultContentLanguageInSubdir = true
+[languages.de]
+weight = 1
+[languages.en]
+weight = 2
+-- layouts/all.html --
+{{ .Title }}
+-- content/index.de.md --
+---
+title: home de
+---
+-- content/index.en.org --
+---
+title: home en
+---
+`
+
+	b := Test(t, files, TestOptWarn())
+
+	b.AssertFileContent("public/de/index.html", "home de")
+	b.AssertFileContent("public/en/index.html", "home en")
+	b.AssertLogContains("Using index.de.md in your content's root directory is usually incorrect for your home page. You should use _index.de.md instead.")
+	b.AssertLogContains("Using index.en.org in your content's root directory is usually incorrect for your home page. You should use _index.en.org instead.")
+}
+
+// Issue 13826
+func TestTemplateSelectionIssue13826(t *testing.T) {
+	t.Parallel()
+
+	files := `
+-- hugo.toml --
+disableKinds = ['home','rss','section','sitemap','taxonomy','term']
+-- content/p1.md --
+---
+title: p1 (type implicitly set to page)
+---
+-- content/p2.md --
+---
+title: p2 (type explicitly set to page)
+type: page
+---
+-- content/p3.md --
+---
+title: p3 (type explicitly set to foo)
+type: foo
+---
+-- content/foo/p4.md --
+---
+title: p4 (type implicitly set to foo)
+---
+-- content/bar/p5.md --
+---
+title: p5 (type explicitly set to foo)
+type: foo
+---
+-- layouts/page/page.html --
+layouts/page/page.html
+-- layouts/foo/page.html --
+layouts/foo/page.html
+-- layouts/page.html --
+layouts/page.html
+`
+
+	b := Test(t, files)
+
+	b.AssertFileContent("public/p1/index.html", "layouts/page/page.html")
+	b.AssertFileContent("public/p2/index.html", "layouts/page/page.html")
+	b.AssertFileContent("public/p3/index.html", "layouts/foo/page.html")
+	b.AssertFileContent("public/foo/p4/index.html", "layouts/foo/page.html")
+	b.AssertFileContent("public/bar/p5/index.html", "layouts/foo/page.html")
+
+	files = strings.ReplaceAll(files, "-- layouts/page/page.html --", "-- delete-me-1.txt --")
+	files = strings.ReplaceAll(files, "-- layouts/foo/page.html --", "-- delete-me-2.txt --")
+
+	b = Test(t, files)
+
+	b.AssertFileContent("public/p1/index.html", "layouts/page.html")
+	b.AssertFileContent("public/p2/index.html", "layouts/page.html")
+	b.AssertFileContent("public/p3/index.html", "layouts/page.html")
+	b.AssertFileContent("public/foo/p4/index.html", "layouts/page.html")
+	b.AssertFileContent("public/bar/p5/index.html", "layouts/page.html")
 }
